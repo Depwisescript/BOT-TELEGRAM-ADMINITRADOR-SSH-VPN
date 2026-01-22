@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # =========================================================
-# INSTALADOR UNIVERSAL: BOT TELEGRAM DEPWISE SSH
+# INSTALADOR UNIVERSAL V3.4: BOT TELEGRAM DEPWISE SSH 💎
 # =========================================================
-# Este script instalará dependencias, configurará el bot 
-# y preparará el entorno de gestión SSH.
+# - FIX: IP Fija e Imborrable (Deteccion Automatica)
+# - FIX: Info Personalizada con Soporte Markdown (Copiable)
+# - Mantiene: V3.3 Fixes, Broadcast, Alias, y Unicode Escapes
 # =========================================================
 
-# Colores para la terminal
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
@@ -15,268 +15,261 @@ NC='\033[0m'
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
-# Verificar usuario root
 if [ "$EUID" -ne 0 ]; then
-  log_error "Por favor, ejecuta este script como root (sudo bash instalador.sh)"
+  log_error "Por favor, ejecuta este script como root"
   exit 1
 fi
 
 clear
 echo -e "${GREEN}=================================================="
-echo -e "       CONFIGURACIÓN BOT TELEGRAM DEPWISE"
+echo -e "       CONFIGURACION BOT DEPWISE V3.4"
 echo -e "==================================================${NC}"
 
-# Pedir datos de configuración
 read -p "Introduce el TOKEN de tu Bot de Telegram: " BOT_TOKEN
 read -p "Introduce tu Chat ID de Telegram (Super Admin): " ADMIN_ID
 
 if [ -z "$BOT_TOKEN" ] || [ -z "$ADMIN_ID" ]; then
-    log_error "Error: El Token y el Chat ID son obligatorios."
+    log_error "Error: Datos incompletos."
     exit 1
 fi
 
-log_info "Instalando dependencias del sistema..."
-apt update && apt install -y python3 python3-pip curl
+log_info "Instalando dependencias..."
+apt update && apt install -y python3 python3-pip curl python3-requests
+pip3 install pytelegrambotapi --break-system-packages --upgrade 2>/dev/null || pip3 install pytelegrambotapi --upgrade
 
-log_info "Instalando librería pyTelegramBotAPI..."
-pip3 install pytelegrambotapi requests --break-system-packages 2>/dev/null || pip3 install pytelegrambotapi requests
-
-# Crear directorio del proyecto
 PROJECT_DIR="/opt/depwise_bot"
 mkdir -p $PROJECT_DIR
 cd $PROJECT_DIR
 
 # ---------------------------------------------------------
-# 1. Crear el Script Gestor de SSH (Bash)
+# 1. Script Gestor SSH
 # ---------------------------------------------------------
-log_info "Creando gestor de usuarios SSH..."
 cat << 'EOF' > ssh_manager.sh
 #!/bin/bash
-set -euo pipefail
-
-# Función para crear usuario
-# Uso: ./ssh_manager.sh crear_user <nombre> <pass> <dias>
-crear_user() {
-    local USER=$1
-    local PASS=$2
-    local DAYS=$3
-    
-    # Calcular fecha de expiración
-    # Formato AAAA-MM-DD
-    local EXP_DATE=$(date -d "+$DAYS days" +%Y-%m-%d)
-    
-    # Crear usuario con directorio home y shell bash
-    if id "$USER" &>/dev/null; then
-        echo "ERROR: El usuario ya existe."
-        return 1
-    fi
-    
-    useradd -m -s /bin/bash -e "$EXP_DATE" "$USER"
-    echo "$USER:$PASS" | chpasswd
-    
-    echo "SUCCESS: Usuario $USER creado. Expira: $EXP_DATE"
+crear_user() { 
+    local EXP_DATE=$(date -d "+$3 days" +%Y-%m-%d)
+    if id "$1" &>/dev/null; then echo "ERROR: Ya existe."; return 1; fi
+    useradd -m -s /bin/bash -e "$EXP_DATE" "$1"
+    echo "$1:$2" | chpasswd
+    echo "SUCCESS: $1|$2|$EXP_DATE"
 }
-
-# Función para eliminar usuario
 eliminar_user() {
-    local USER=$1
-    if id "$USER" &>/dev/null; then
-        userdel -r "$USER"
-        echo "SUCCESS: Usuario $USER eliminado."
-    else
-        echo "ERROR: El usuario no existe."
-        return 1
-    fi
+    if id "$1" &>/dev/null; then userdel -f -r "$1"; echo "SUCCESS"; else echo "ERROR"; fi
 }
-
+listar_users() {
+    echo "USERS_LIST:"
+    cut -d: -f1,7 /etc/passwd | grep "/bin/bash" | cut -d: -f1 | while read user; do
+        exp=$(chage -l "$user" | grep "Account expires" | cut -d: -f2)
+        if [[ "$exp" != *"never"* ]]; then echo "- $user (Vence:$exp)"; fi
+    done
+}
 case "$1" in
     crear_user) crear_user "$2" "$3" "$4" ;;
     eliminar_user) eliminar_user "$2" ;;
-    *) echo "Uso: $0 {crear_user|eliminar_user} ..." ;;
+    listar_users) listar_users ;;
 esac
 EOF
 chmod +x ssh_manager.sh
 
 # ---------------------------------------------------------
-# 2. Crear el Bot de Python
+# 2. Bot de Python V3.4 (PRO CUSTOM)
 # ---------------------------------------------------------
-log_info "Creando script del bot de Telegram..."
+log_info "Creando bot V3.4 (Static IP + Selectable Info)..."
 cat << EOF > depwise_bot.py
+# -*- coding: utf-8 -*-
 import telebot
+from telebot import types
 import subprocess
 import json
 import os
 import requests
 import string
 import random
+import time
 
-# Configuración inicial
+# Iconos Unicode Escaped
+ICON_CHECK = u'\U00002705'
+ICON_USER = u'\U0001F464'
+ICON_DEL = u'\U0001F5D1\U0000FE0F'
+ICON_INFO = u'\U0001F4E1'
+ICON_GEAR = u'\U00002699\U0000FE0F'
+ICON_WRITE = u'\U0001F4DD'
+ICON_TIME = u'\U000023F3'
+ICON_PIN = u'\U0001F4CD'
+ICON_KEY = u'\U0001F511'
+ICON_MIC = u'\U0001F4E2'
+ICON_BACK = u'\U0001F519'
+ICON_PLUS = u'\U00002795'
+ICON_MINUS = u'\U00002796'
+ICON_GEM = u'\U0001F48E'
+ICON_MEGA = u'\U0001F4E3'
+ICON_DEV = u'\U0001F4BB'
+
 TOKEN = '$BOT_TOKEN'
-SUPER_ADMIN = $ADMIN_ID
+SUPER_ADMIN = int('$ADMIN_ID')
 PROJECT_DIR = '$PROJECT_DIR'
-ADMINS_FILE = os.path.join(PROJECT_DIR, 'admins.json')
+DATA_FILE = os.path.join(PROJECT_DIR, 'bot_data.json')
 
 bot = telebot.TeleBot(TOKEN)
 
-# Cargar administradores
-if not os.path.exists(ADMINS_FILE):
-    with open(ADMINS_FILE, 'w') as f:
-        json.dump({"admins": {}}, f)
+def get_public_ip():
+    try: return requests.get('https://api.ipify.org', timeout=10).text.strip()
+    except: return "IP No Detectada"
 
-def get_admins():
-    with open(ADMINS_FILE, 'r') as f:
-        return json.load(f)
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        default = {"admins": {}, "extra_info": "Puertos: 22, 80, 443", "user_history": []}
+        save_data(default); return default
+    data = json.load(open(DATA_FILE))
+    if 'extra_info' not in data: data['extra_info'] = "Sin informacion adicional."
+    return data
 
-def save_admins(data):
-    with open(ADMINS_FILE, 'w') as f:
-        json.dump(data, f)
+def save_data(data):
+    with open(DATA_FILE, 'w') as f: json.dump(data, f)
 
 def is_admin(chat_id):
+    if chat_id == SUPER_ADMIN: return True
+    return str(chat_id) in load_data().get('admins', {})
+
+def main_menu(chat_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(ICON_USER + " Crear SSH", callback_data="menu_crear"),
+        types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar"),
+        types.InlineKeyboardButton(ICON_INFO + " Info Servidor", callback_data="menu_info")
+    )
     if chat_id == SUPER_ADMIN:
-        return True
-    data = get_admins()
-    return str(chat_id) in data['admins']
+        markup.add(
+            types.InlineKeyboardButton(ICON_MEGA + " Mensaje Global", callback_data="menu_broadcast"),
+            types.InlineKeyboardButton(ICON_GEAR + " Ajustes Pro", callback_data="menu_admins")
+        )
+    bot.send_message(chat_id, ICON_GEM + " **BOT TELEGRAM DEPWISE V3.4**", parse_mode='Markdown', reply_markup=markup)
 
-def get_public_ip():
-    try:
-        return requests.get('https://ipapi.co/ip/').text.strip()
-    except:
-        return "IP no detectada"
-
-# Comandos
 @bot.message_handler(commands=['start', 'menu'])
-def send_welcome(message):
-    chat_id = message.chat.id
-    if not is_admin(chat_id):
-        bot.reply_to(message, "❌ Acceso Denegado. No eres administrador.")
-        return
-    
-    text = "🚀 **BOT TELEGRAM DEPWISE**\n\n"
-    text += "Comandos disponibles:\n"
-    text += "• /crear [nombre] [dias] - Crear nuevo SSH\n"
-    text += "• /eliminar [nombre] - Eliminar SSH\n"
-    
-    if chat_id == SUPER_ADMIN:
-        text += "\n👑 **Funciones de Super Admin:**\n"
-        text += "• /add_admin [id] [nombre] - Agregar administrador\n"
-        text += "• /del_admin [id] - Eliminar administrador\n"
-    
-    bot.send_message(chat_id, text, parse_mode='Markdown')
+def handle_start(message):
+    data = load_data()
+    if message.chat.id not in data['user_history']:
+        data['user_history'].append(message.chat.id); save_data(data)
+    main_menu(message.chat.id)
 
-@bot.message_handler(commands=['crear'])
-def handle_crear(message):
-    chat_id = message.chat.id
-    if not is_admin(chat_id): return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Uso: /crear [nombre] [dias (opcional para Super Admin)]")
-        return
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    if call.data == "menu_crear":
+        msg = bot.send_message(chat_id, ICON_WRITE + " **Nombre del usuario:**")
+        bot.register_next_step_handler(msg, process_username)
+    elif call.data == "menu_eliminar":
+        res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'listar_users'], capture_output=True, text=True)
+        users = res.stdout.replace("USERS_LIST:", "").strip() or "Vacio"
+        msg = bot.send_message(chat_id, ICON_USER + " **USUARIOS REGISTRADOS:**\n" + users + "\n\nEscribe el nombre:")
+        bot.register_next_step_handler(msg, process_delete)
+    elif call.data == "menu_info":
+        ip = get_public_ip()
+        extra = load_data().get('extra_info', '')
+        text = ICON_INFO + " **DATOS DEL SERVIDOR**\n\n"
+        text += ICON_PIN + " **IP Fija:** \`" + ip + "\` (Copiable)\n"
+        text += "------------------\n" + extra
+        bot.send_message(chat_id, text, parse_mode='Markdown')
+        main_menu(chat_id)
+    elif call.data == "menu_broadcast" and chat_id == SUPER_ADMIN:
+        msg = bot.send_message(chat_id, ICON_MEGA + " **MENSAJE GLOBAL:**\nEscribe el texto:")
+        bot.register_next_step_handler(msg, process_broadcast)
+    elif call.data == "menu_admins" and chat_id == SUPER_ADMIN:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("➕ Anadir Admin", callback_data="admin_add"),
+            types.InlineKeyboardButton("🗑️ Eliminar Admin", callback_data="admin_del"),
+            types.InlineKeyboardButton("📝 Editar Info Extra", callback_data="set_edit_info"),
+            types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
+        )
+        bot.send_message(chat_id, ICON_GEAR + " **AJUSTES AVANZADOS**", reply_markup=markup)
+    elif call.data == "set_edit_info":
+        msg = bot.send_message(chat_id, "Escribe la info extra (Dominios, Puertos, Notas).\nTIP: Usa \`texto\` para hacerlo copiable.")
+        bot.register_next_step_handler(msg, process_save_info)
+    elif call.data == "admin_add":
+        msg = bot.send_message(chat_id, "ID del Admin:")
+        bot.register_next_step_handler(msg, process_admin_id)
+    elif call.data == "admin_del":
+        data = load_data(); admins = data.get('admins', {})
+        text = "ADMINS:\n"
+        for aid, val in admins.items(): text += "- \`" + aid + "\` (" + val.get('alias','-') + ")\n"
+        bot.send_message(chat_id, text + "\nID a borrar:")
+        bot.register_next_step_handler(call.message, process_admin_del)
+    elif call.data == "back_main": main_menu(chat_id)
 
-    username = args[1]
-    
-    # Gestión de días
-    days = 3 # Default
-    if len(args) >= 3:
-        try:
-            requested_days = int(args[2])
-            if chat_id == SUPER_ADMIN or get_admins()['admins'].get(str(chat_id), {}).get('unlimited', False):
-                days = requested_days
-            else:
-                bot.reply_to(message, "⚠️ Solo puedes crear usuarios de 3 días.")
-                days = 3
-        except ValueError:
-            bot.reply_to(message, "⚠️ Días inválidos. Usando 3 días.")
+def process_save_info(message):
+    data = load_data(); data['extra_info'] = message.text; save_data(data)
+    bot.send_message(message.chat.id, ICON_CHECK + " Info Guardada."); main_menu(message.chat.id)
 
-    # Generar password aleatorio
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    ip = get_public_ip()
+def process_admin_id(message):
+    aid = message.text.strip()
+    msg = bot.send_message(message.chat.id, "Sobrenombre:")
+    bot.register_next_step_handler(msg, lambda m: finalize_admin(m, aid))
 
-    # Ejecutar script bash
-    cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', username, password, str(days)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def finalize_admin(message, aid):
+    data = load_data(); data['admins'][aid] = {"alias": message.text.strip()}; save_data(data)
+    bot.send_message(message.chat.id, ICON_CHECK + " OK."); main_menu(message.chat.id)
 
-    if "SUCCESS" in result.stdout:
-        msg = f"✅ **BOT TELEGRAM DEPWISE**\n"
-        msg += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"📍 **IP Pública:** `{ip}`\n"
-        msg += f"👤 **Usuario:** `{username}`\n"
-        msg += f"🔑 **Password:** `{password}`\n"
-        msg += f"⏳ **Duración:** `{days} días`\n"
-        msg += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"ℹ️ *TODOS LOS PUERTO Y CONEXIONES ACTIVOS EN EL CANAL @Depwise2*"
-        bot.send_message(chat_id, msg, parse_mode='Markdown')
-    else:
-        bot.reply_to(message, f"❌ Error: {result.stdout or result.stderr}")
+def process_admin_del(message):
+    data = load_data(); aid = message.text.strip()
+    if aid in data['admins']: del data['admins'][aid]; save_data(data); bot.send_message(message.chat.id, "Borrado.")
+    else: bot.send_message(message.chat.id, "No hallado.")
+    main_menu(message.chat.id)
 
-@bot.message_handler(commands=['eliminar'])
-def handle_eliminar(message):
-    chat_id = message.chat.id
-    if not is_admin(chat_id): return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Uso: /eliminar [nombre]")
-        return
+def process_username(message):
+    user = message.text.strip()
+    if message.chat.id == SUPER_ADMIN:
+        msg = bot.send_message(message.chat.id, ICON_TIME + " **Dias?**")
+        bot.register_next_step_handler(msg, lambda m: finalize_ssh(m, user))
+    else: finalize_ssh(message, user, 3 if not is_admin(message.chat.id) else 7)
 
-    username = args[1]
-    cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_user', username]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def finalize_ssh(message, user, days=None):
+    if days is None:
+        try: days = int(message.text)
+        except: days = 3
+    pwd = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, str(days)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if "SUCCESS" in res.stdout:
+        ip = get_public_ip()
+        extra = load_data().get('extra_info', '')
+        dt = res.stdout.strip().split('|')[2]
+        msg = ICON_CHECK + " **BOT TELEGRAM DEPWISE**\n--------------------------------------\n"
+        msg += ICON_PIN + " **HOST IP:** \`" + ip + "\` (Copiable)\n"
+        if extra: msg += extra + "\n"
+        msg += "**USER:** \`" + user + "\`\n**PASS:** \`" + pwd + "\`\n"
+        msg += "**VENCE:** " + dt + " (" + str(days) + " dias)\n--------------------------------------\n"
+        msg += ICON_MIC + " @Depwise2 | " + ICON_DEV + " @Dan3651"
+        bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+    else: bot.send_message(message.chat.id, "Error: " + res.stdout)
+    main_menu(message.chat.id)
 
-    if "SUCCESS" in result.stdout:
-        bot.send_message(chat_id, f"🗑️ Usuario `{username}` eliminado correctamente.")
-    else:
-        bot.reply_to(message, f"❌ Error: {result.stdout or result.stderr}")
+def process_broadcast(message):
+    ids = load_data().get('user_history', [])
+    for uid in ids:
+        try: bot.send_message(uid, ICON_MEGA + " **AVISO:**\n\n" + message.text, parse_mode='Markdown'); time.sleep(0.1)
+        except: pass
+    bot.send_message(message.chat.id, "Completado."); main_menu(message.chat.id)
 
-@bot.message_handler(commands=['add_admin'])
-def handle_add_admin(message):
-    if message.chat.id != SUPER_ADMIN: return
-    
-    args = message.text.split()
-    if len(args) < 3:
-        bot.reply_to(message, "⚠️ Uso: /add_admin [id] [nombre]")
-        return
-    
-    new_id = args[1]
-    name = args[2]
-    
-    data = get_admins()
-    data['admins'][new_id] = {"name": name, "unlimited": False}
-    save_admins(data)
-    
-    bot.reply_to(message, f"✅ Admin `{name}` ({new_id}) agregado.")
+def process_delete(message):
+    subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_user', message.text.strip()])
+    bot.send_message(message.chat.id, "Hecho."); main_menu(message.chat.id)
 
-# Iniciar
-print("Bot Depwise encendido...")
-bot.infinity_polling()
+if __name__ == "__main__":
+    while True:
+        try: bot.infinity_polling(timeout=50)
+        except Exception: time.sleep(10)
 EOF
 
 # ---------------------------------------------------------
-# 3. Crear Servicio Systemd (Opcional pero recomendado)
+# 3. Reiniciar Servicio
 # ---------------------------------------------------------
-log_info "Configurando servicio para ejecución automática..."
-cat << EOF > /etc/systemd/system/depwise.service
-[Unit]
-Description=Bot Telegram Depwise SSH
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 $PROJECT_DIR/depwise_bot.py
-WorkingDirectory=$PROJECT_DIR
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 systemctl daemon-reload
-systemctl enable depwise.service
-systemctl start depwise.service
+systemctl stop depwise.service 2>/dev/null
+systemctl restart depwise.service
 
 echo -e "${GREEN}=================================================="
-echo -e "       INSTALACIÓN COMPLETADA CON ÉXITO"
+echo -e "       INSTALACION V3.4 COMPLETADA 💎"
 echo -e "=================================================="
-echo -e "Tu bot DEPWISE ya está funcionando como servicio."
-echo -e "Usa /start en Telegram para interactuar.${NC}"
-echo -e "Ruta del proyecto: $PROJECT_DIR"
+echo -e "IP Estatica y Markdown activados con exito.${NC}"
