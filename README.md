@@ -53,5 +53,5 @@ Al editar la **Info Extra**, puedes usar comillas invertidas para que el texto s
 > Ejemplo: `Conectar a: \`dominio.com\` Puerto: \`8080\``
 
 ---
-**Desarrollado por:** [@Dan36511](https://t.me/Dan36511)
+**Desarrollado por:** [@Dan36511](https://t.me/Dan3651)
 **Canal de Soporte:** [@Depwise2](https://t.me/Depwise2)
