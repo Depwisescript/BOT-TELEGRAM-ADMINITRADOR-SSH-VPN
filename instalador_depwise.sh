@@ -41,6 +41,12 @@ PROJECT_DIR="/opt/depwise_bot"
 mkdir -p $PROJECT_DIR
 cd $PROJECT_DIR
 
+# Verificación de herramientas
+if ! command -v python3 &> /dev/null; then
+    log_error "Python3 no se instaló correctamente."
+    exit 1
+fi
+
 # ---------------------------------------------------------
 # 1. Script Gestor SSH
 # ---------------------------------------------------------
@@ -113,8 +119,13 @@ DATA_FILE = os.path.join(PROJECT_DIR, 'bot_data.json')
 bot = telebot.TeleBot(TOKEN)
 
 def get_public_ip():
-    try: return requests.get('https://api.ipify.org', timeout=10).text.strip()
-    except: return "IP No Detectada"
+    urls = ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com']
+    for url in urls:
+        try:
+            return requests.get(url, timeout=5).text.strip()
+        except:
+            continue
+    return "IP No Detectada"
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -263,10 +274,31 @@ if __name__ == "__main__":
 EOF
 
 # ---------------------------------------------------------
-# 3. Reiniciar Servicio
+# 3. Crear Servicio Systemd
+# ---------------------------------------------------------
+log_info "Configurando servicio systemd..."
+cat << EOF > /etc/systemd/system/depwise.service
+[Unit]
+Description=Bot Telegram Depwise SSH
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/python3 $PROJECT_DIR/depwise_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ---------------------------------------------------------
+# 4. Reiniciar Servicio
 # ---------------------------------------------------------
 systemctl daemon-reload
-systemctl stop depwise.service 2>/dev/null
+systemctl enable depwise.service
 systemctl restart depwise.service
 
 echo -e "${GREEN}=================================================="
