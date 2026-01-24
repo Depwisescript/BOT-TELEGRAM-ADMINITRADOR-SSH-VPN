@@ -30,7 +30,7 @@ Este es un bot de gestión SSH para Telegram altamente optimizado y automatizado
 Para instalar o actualizar a la versión 6.1, ejecuta el siguiente comando en tu terminal como root:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/TuUsuario/TuRepositorio/main/instalador_depwise.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADMINITRADOR-SSH-VPN/refs/heads/main/instalador_depwise.sh)
 ```
 
 ## 📋 Requisitos del Sistema
@@ -44,3 +44,4 @@ bash <(curl -Ls https://raw.githubusercontent.com/TuUsuario/TuRepositorio/main/i
 
 ---
 *Este proyecto está diseñado para fines educativos y de gestión de redes privadas.*
+
