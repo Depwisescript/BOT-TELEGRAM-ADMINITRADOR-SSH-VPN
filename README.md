@@ -1,57 +1,46 @@
-# 💎 BOT TELEGRAM DEPWISE SSH (V3.4 PRO)
+# 💎 Bot Telegram Depwise SSH - Versión 6.1 (PRO CUSTOM)
 
-¡Bienvenido al gestor de usuarios SSH más avanzado para Telegram! Este bot permite automatizar la creación, eliminación y gestión de cuentas SSH con límites de tiempo, todo desde una interfaz intuitiva de Telegram con botones profesionales.
+Este es un bot de gestión SSH para Telegram altamente optimizado y automatizado, diseñado para administradores que buscan velocidad, estabilidad y una experiencia de usuario premium.
 
-## 🚀 Características Principales
+## 🚀 Características Principales (V6.1)
 
--   **🌐 Acceso Público**: Permite que cualquier usuario cree cuentas SSH de **3 días** automáticamente.
--   **👥 Jerarquía de Admins**:
-    -   **Público**: 3 días fijos.
-    -   **Admins**: 7 días fijos (Agregados por el Super Admin).
-    -   **Super Admin**: Duración personalizada e ilimitada.
--   **📱 Interfaz de Botones**: Menús interactivos fáciles de usar, sin comandos complejos.
--   **📢 Mensajes Globales (Broadcast)**: El Super Admin puede enviar anuncios a todos los usuarios que hayan usado el bot.
--   **⚡ Click-to-Copy**: IP, Usuario y Contraseña formateados para copiar con un toque.
--   **📝 Editor Dinámico**: Personaliza la información del servidor (dominios, puertos, notas) con soporte para Markdown.
--   **🛠️ Autodestrucción**: Las cuentas caducan automáticamente a nivel de sistema operativo.
--   **🔒 Seguridad Universal**: Codificación UTF-8 compatible con cualquier VPS (Ubuntu, Debian, etc.).
+### 🖥️ Navegación de un Solo Mensaje (UX VIP)
+- **Mensaje Dinámico**: Olvídate del spam del bot. Toda la navegación entre menús (Ajustes, Info, Protocolos) ocurre editando un único mensaje principal.
+- **Limpieza de Chat**: El bot elimina automáticamente los mensajes enviados por el usuario para mantener el chat limpio y profesional.
+- **Navegación Fluida**: Botones de "Volver" integrados en cada acción para una gestión sin interrupciones.
 
-## 📋 Requisitos
+### 🌐 Instalador Maestro de SlowDNS (Zero-Link)
+- **Detección de Arquitectura**: El bot identifica automáticamente si tu VPS es `amd64`, `arm64`, `arm` o `386` y descarga el binario verificado exacto.
+- **Red de Espejos (Mirrors)**: Sistema inteligente que prueba múltiples fuentes de descarga oficiales si una falla, evitando errores de enlaces caídos.
+- **Logs en Tiempo Real**: Botón 🔄 **Actualizar Estado** para ver el progreso real (descarga, llaves, red) mientras el bot trabaja en segundo plano.
+- **Ejecución Asíncrona (Multihilo)**: La instalación no bloquea el bot; puedes seguir usando otras funciones mientras se configura el servidor.
 
--   Un servidor Linux (VPS) con acceso Root (Recomendado Ubuntu/Debian).
--   **Python 3.x** instalado.
--   Uun **Bot Token** (Obtenido de [@BotFather](https://t.me/BotFather)).
--   Tu **Chat ID** de Telegram (Obtenido de [@userinfobot](https://t.me/userinfobot)).
+### 🛡️ Seguridad y Robustez
+- **Control de Acceso Público**: El Super Admin puede activar o desactivar el acceso al bot para usuarios generales mediante un interruptor en "Ajustes Pro".
+- **Escape de HTML**: Protección total contra errores de parseo de Telegram. Cualquier salida del sistema se muestra de forma segura como texto plano.
+- **Gestión de Dueños**: Los administradores secundarios solo pueden ver y eliminar los usuarios SSH que ellos mismos crearon.
 
-## 🛠️ Instalación en 1 Minuto
+### 📈 Monitoreo Avanzado
+- **Monitor Online (Super Admin)**: Visualiza en tiempo real qué usuarios están conectados y cuántas sesiones tienen activas.
+- **Info Servidor Pro**: Datos técnicos detallados que incluyen IP fija, límites de puertos y la configuración completa de SlowDNS (NS y Public Key) en formato copiable.
+- **Confirmación Integrada**: Al crear un usuario SSH, el bot entrega en un solo mensaje: usuario, contraseña, fecha de vencimiento y los datos de conexión SlowDNS.
 
-Sube el archivo `instalador_depwise.sh` a tu servidor y ejecuta los siguientes comandos:
+## 🛠️ Instalación en tu VPS
+
+Para instalar o actualizar a la versión 6.1, ejecuta el siguiente comando en tu terminal como root:
 
 ```bash
-# Dar permisos de ejecución
-chmod +x instalador_depwise.sh
-
-# Iniciar instalación
-sudo ./instalador_depwise.sh
+bash <(curl -Ls https://raw.githubusercontent.com/TuUsuario/TuRepositorio/main/instalador_depwise.sh)
 ```
 
-El script te pedirá el **TOKEN** y tu **CHAT ID** para configurar todo automáticamente.
+## 📋 Requisitos del Sistema
+- Sistema Operativo: Ubuntu 20.04+ o Debian 10+.
+- Acceso Root.
+- Token de Bot de Telegram (obtenido en @BotFather).
 
-## 🤖 Comandos del Bot
-
--   `/start` o `/menu`: Abre el panel de control principal.
--   **👤 Crear SSH**: Crea una cuenta con los límites de tu rango.
--   **🗑️ Eliminar SSH**: Muestra una lista de usuarios y permite borrar uno.
--   **📡 Info Servidor**: Muestra la IP y la información extra configurada.
--   **⚙️ Ajustes Pro** (Solo Super Admin):
-    -   Añadir/Quitar Admins con alias.
-    -   Editar la información dinámica del servidor.
--   **📢 Mensaje Global** (Solo Super Admin): Envía una notificación a toda la base de datos de usuarios.
-
-## 💡 Tips de Edición
-Al editar la **Info Extra**, puedes usar comillas invertidas para que el texto sea seleccionable en Telegram:
-> Ejemplo: `Conectar a: \`dominio.com\` Puerto: \`8080\``
+## 💎 Créditos
+- **Desarrollo Core**: @Dan3651
+- **Comunidad**: @Depwise2
 
 ---
-**Desarrollado por:** [@Dan36511](https://t.me/Dan3651)
-**Canal de Soporte:** [@Depwise2](https://t.me/Depwise2)
+*Este proyecto está diseñado para fines educativos y de gestión de redes privadas.*
