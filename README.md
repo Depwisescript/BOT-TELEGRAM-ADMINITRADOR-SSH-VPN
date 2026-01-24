@@ -37,11 +37,12 @@ bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADM
 - Sistema Operativo: Ubuntu 20.04+ o Debian 10+.
 - Acceso Root.
 - Token de Bot de Telegram (obtenido en @BotFather).
-
+- ID USER SUPERADMIN (obtenido en @userinfobot )
 ## 💎 Créditos
 - **Desarrollo Core**: @Dan3651
 - **Comunidad**: @Depwise2
 
 ---
 *Este proyecto está diseñado para fines educativos y de gestión de redes privadas.*
+
 
