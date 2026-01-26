@@ -1,8 +1,14 @@
-# 💎 Bot Telegram Depwise SSH - Versión 6.5 (ENHANCED)
+# 💎 Bot Telegram Depwise SSH - Versión 6.6 (FIXED)
 
 Este es un bot de gestión SSH y VPN para Telegram de alto rendimiento, diseñado para administradores que buscan una solución integral, estética y profesional.
 
-## 🚀 Novedades de la Versión 6.5
+## 🚀 Novedades de la Versión 6.6
+
+### 🛠️ Reparación Integral de ProxyDT
+- **Instalación Robusta**: Sistema de múltiples espejos (mirrors) que garantiza la descarga del binario incluso si el repositorio principal falla.
+- **Soporte Multi-Arquitectura**: Detección automática de **AMD64** y **ARM64** para instalar el binario correcto según tu VPS.
+- **Auto-Fix de Dependencias**: Solución automática para el error `libssl.so.1.1 not found` en sistemas modernos (Ubuntu 22.04+), instalando las librerías necesarias sin intervención manual.
+- **Socket Bind Fix**: Corrección de banderas de arranque para evitar el error "Failed to bind socket".
 
 ### 🛰️ Gestión Avanzada de ZIVPN (UDP)
 - **Multi-Cuenta**: Soporte para múltiples passwords activos simultáneamente en un solo puerto.
