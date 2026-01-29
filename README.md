@@ -1,59 +1,70 @@
-# 💎 Bot Telegram Depwise SSH - Versión 6.6 (FIXED)
+# 💎 Bot Telegram Depwise SSH - Versión 6.7 (PRO)
 
-Este es un bot de gestión SSH y VPN para Telegram de alto rendimiento, diseñado para administradores que buscan una solución integral, estética y profesional.
+Este es un bot de gestión SSH y VPN para Telegram de alto rendimiento. Diseñado para administradores que buscan una solución integral, **estética** y robusta.
 
-## 🚀 Novedades de la Versión 6.6
+---
 
-### 🛠️ Reparación Integral de ProxyDT
-- **Instalación Robusta**: Sistema de múltiples espejos (mirrors) que garantiza la descarga del binario incluso si el repositorio principal falla.
-- **Soporte Multi-Arquitectura**: Detección automática de **AMD64** y **ARM64** para instalar el binario correcto según tu VPS.
-- **Auto-Fix de Dependencias**: Solución automática para el error `libssl.so.1.1 not found` en sistemas modernos (Ubuntu 22.04+), instalando las librerías necesarias sin intervención manual.
-- **Socket Bind Fix**: Corrección de banderas de arranque para evitar el error "Failed to bind socket".
+## 🚀 Novedades de la Versión 6.7
 
-### 🛰️ Gestión Avanzada de ZIVPN (UDP)
-- **Multi-Cuenta**: Soporte para múltiples passwords activos simultáneamente en un solo puerto.
-- **Sistema de Permisos por Rol**: 
-  - 👤 **Usuarios**: Creación de passwords por 3 días.
-  - 👮 **Admins**: Creación de passwords por 7 días.
-  - 👑 **Super Admin**: Sin límites (personalizable).
-- **Tracking de Propiedad**: Cada password está vinculado a su creador, permitiendo un control total sobre las ventas y accesos.
+### ☁️ Integración Total con Dominios (Cloudflare + CloudFront)
+- **Dominio Cloudflare:** Configura tu dominio principal para SSH/Websock.
+- **Dominio CloudFront:** [NUEVO] Agrega tu dominio CloudFront para distribución de contenido o payload.
+- **Auto-Limpieza**: Los mensajes de confirmación se eliminan automáticamente a los 3 segundos para mantener tu chat impecable.
+- **Visibilidad**: Ambos dominios aparecen en "Info Servidor" y son **copiables** al crear usuarios.
 
-### 🌐 Integración con Cloudflare
-- **Dominio Personalizado**: Configura un dominio Cloudflare que apunte a tu VPS desde el menú "Ajustes Pro".
-- **Visibilidad Total**: El dominio se muestra automáticamente en el menú "Info Servidor" y se incluye en los mensajes de entrega al crear usuarios SSH o passwords ZIVPN.
+### 🛰️ Gestión Avanzada de Protocolos
+- **ZIVPN (UDP) Mejorado**:
+  - **🔍 Verificación de Actividad**: Nueva función para revisar si una contraseña tiene uso reciente (lee logs del sistema).
+  - **Submenú Dedicado**: Gestión de instalación y eliminación separada.
+- **BadVPN / UDPGW 2.0**:
+  - **Instalador Robusto**: Compilación desde fuente con detección de errores, re-instalación forzada y limpieza de servicios previos.
+  - **Anti-Bloqueo**: Usa `cmake` y `make` con flags optimizados.
+- **Dropbear Secure**:
+  - Generación automática de llaves (`host keys`) y servicio custom para evitar conflictos.
 
-### 📊 Monitor Online Pro (Filtrado)
-- **Privacidad para Admins**: Los administradores secundarios ahora solo pueden ver los usuarios SSH y los passwords ZIVPN que ellos mismos han creado.
-- **Vista Global (Super Admin)**: El Super Admin mantiene acceso a la lista completa con información detallada de los dueños de cada cuenta.
+### 📱 Experiencia de Usuario (UX)
+- **Menús Reorganizados**: "Gestión de Protocolos" ahora es un hub limpio que redirige a submenús específicos (SlowDNS, ZIVPN, ProxyDT).
+- **Todo Copiable**: IPs, Puertos, Usuarios, Passwords y Dominios usan formato `<code>` de Telegram para copiar con un toque.
 
-### 🖥️ UX VIP y Mejoras Estéticas
-- **Todo Copiable**: IPs, Dominios, Puertos, Usuarios y Contraseñas ahora usan etiquetas `<code>` de Telegram para copiar con un solo toque.
-- **Info Extendida**: El menú de información ahora incluye rangos de puertos UDP para ZIVPN y estado del dominio.
+---
 
 ## 🛡️ Características Core
 
-- **Navegación de un Solo Mensaje**: Olvídate del spam; el bot edita un único mensaje para todas las funciones.
-- **Limpieza Automática**: El bot elimina los comandos del usuario para mantener el chat impecable.
-- **Instalador de SlowDNS**: Detección automática de arquitectura y red de espejos (mirrors) para instalaciones sin fallos.
-- **Gestión de ProxyDT-Go (WebSocket)**: Abre y cierra puertos WebSocket con un solo clic.
+- **Navegación Fluida**: El bot edita un único mensaje para todas las funciones (evita el spam).
+- **ProxyDT-Go (Cracked)**:
+  - Soporte Multi-Arquitectura (AMD64/ARM64).
+  - Instalación automática con múltiples espejos (mirrors).
+  - Apertura/Cierre de puertos WebSocket en caliente.
+- **SlowDNS Manager**: Instalación automática de DNSTT con claves y servicio systemd.
+- **Monitor de Usuarios**:
+  - **Admin**: Ve sus propios usuarios.
+  - **Super Admin**: Ve todos los usuarios y dueños.
 
-## 🛠️ Instalación en tu VPS
+---
 
-Para instalar o actualizar a la versión 6.5, ejecuta el siguiente comando como root:
+## 🛠️ Instalación Rápida
+
+Ejecuta este comando en tu terminal (como root):
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADMINITRADOR-SSH-VPN/refs/heads/main/instalador_depwise.sh)
 ```
 
-## 📋 Requisitos del Sistema
-- **SO**: Ubuntu 20.04+ / Debian 10+.
-- **Acceso**: Root obligatorio.
-- **Herramientas**: `curl`, `python3`.
-- **Bot**: Token de @BotFather e ID de @userinfobot.
+**Requisitos:**
+- Ubuntu 20.04+ / Debian 10+
+- Python 3 instalado (el script lo instala si falta).
+
+---
+
+## ⚙️ Configuración Inicial
+Al instalar, el script te pedirá:
+1.  **Token del Bot**: Consíguelo en @BotFather.
+2.  **ID de Admin**: Tu ID numérico de Telegram (usa @userinfobot).
+
+---
 
 ## 💎 Créditos
 - **Desarrollo Core**: @Dan3651
 - **Comunidad**: @Depwise2
 
----
-*Este proyecto está diseñado para fines de gestión de redes privadas y administración de servidores.*
+*Este proyecto es para administración de redes privadas.*
