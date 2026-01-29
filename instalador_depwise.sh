@@ -1688,6 +1688,77 @@ def process_zivpn_pass(message):
         days = 7 if is_adm else 3
         finalize_zivpn(message, pwd, days)
 
+def finalize_zivpn(message, pwd, days=None):
+    delete_user_msg(message)
+    try:
+        chat_id = message.chat.id
+        if days is None:
+            try: days = int(message.text)
+            except ValueError:
+                bot.send_message(chat_id, "❌ Error: Los dias deben ser un numero.")
+                main_menu(chat_id, USER_STEPS.get(chat_id))
+                return
+
+        status_msg = bot.send_message(chat_id, f"⏳ <b>Registrando ZIVPN ({days} dias)...</b>", parse_mode='HTML')
+        
+        # Llamada a bash para agregar al config.json y reiniciar
+        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'add', pwd]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        try: bot.delete_message(chat_id, status_msg.message_id)
+        except: pass
+
+        if "ZIVPN_PASS_UPDATED" in res.stdout:
+            # Calcular fecha
+            exp_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+            
+            # Guardar en base de datos bot (para tracking de dueño)
+            data = load_data()
+            if 'zivpn_users' not in data: data['zivpn_users'] = {}
+            if 'zivpn_owners' not in data: data['zivpn_owners'] = {}
+            
+            data['zivpn_users'][pwd] = exp_date
+            data['zivpn_owners'][pwd] = str(chat_id)
+            save_data(data)
+            
+            # Construir mensaje de exito
+            ip = get_public_ip()
+            extra = data.get('extra_info', '')
+            domain = data.get('cloudflare_domain', '')
+            cfront = data.get('cloudfront_domain', '')
+            
+            msg = ICON_CHECK + " <b>CUENTA ZIVPN CREADA</b>\n"
+            msg += "--------------------------------------\n"
+            msg += ICON_PIN + " <b>IP:</b> <code>" + ip + "</code>\n"
+            if domain: msg += "🌐 <b>DOMINIO:</b> <code>" + domain + "</code>\n"
+            if cfront: msg += "☁️ <b>CLOUDFRONT:</b> <code>" + cfront + "</code>\n"
+            if extra: msg += safe_format(extra) + "\n"
+            
+            msg += "\n🔐 <b>PASSWORD:</b> <code>" + pwd + "</code>\n"
+            msg += "📡 <b>PUERTOS UDP:</b> <code>6000-19999</code>\n"
+            msg += "⚠️ <b>PUERTO VPN:</b> <code>5667</code>\n"
+            msg += "📅 <b>EXPIRA:</b> " + exp_date + f" ({days} dias)\n"
+            msg += "--------------------------------------\n"
+            msg += ICON_MIC + " @Depwise2 | " + ICON_DEV + " @Dan3651"
+            
+            # Enviar mensaje final
+            if USER_STEPS.get(chat_id):
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+                try: bot.edit_message_text(msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+                except: bot.send_message(chat_id, msg, parse_mode='HTML')
+            else:
+                bot.send_message(chat_id, msg, parse_mode='HTML')
+                
+        else:
+            err = res.stdout + "\n" + res.stderr
+            bot.send_message(chat_id, f"❌ <b>Error al crear ZIVPN:</b>\n<pre>{html_lib.escape(err[-200:])}</pre>", parse_mode='HTML')
+            main_menu(chat_id, USER_STEPS.get(chat_id))
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ <b>Error Critico:</b> {str(e)}")
+        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+
 def finalize_ssh(message, user, days=None):
     delete_user_msg(message)
     try:
