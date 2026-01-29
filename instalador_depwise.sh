@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =========================================================
-# INSTALADOR UNIVERSAL V6.5: BOT TELEGRAM DEPWISE SSH 💎
+# INSTALADOR UNIVERSAL V6.6: BOT TELEGRAM DEPWISE SSH 💎
 # =========================================================
 # - FIX: IP Fija e Imborrable (Deteccion Automatica)
 # - FIX: Info Personalizada con Soporte Markdown (Copiable)
@@ -36,7 +36,7 @@ elif [ -f "$PROJECT_DIR/depwise_bot.py" ]; then
 fi
 
 echo -e "${GREEN}=================================================="
-echo -e "       CONFIGURACION BOT DEPWISE V6.5"
+echo -e "       CONFIGURACION BOT DEPWISE V6.6"
 echo -e "==================================================${NC}"
 
 read -p "Introduce el TOKEN [${OLD_TOKEN:-}]: " BOT_TOKEN
@@ -492,6 +492,33 @@ eliminar_zivpn() {
     systemctl daemon-reload
     echo "ZIVPN_REMOVED"
 }
+
+verificar_zivpn_user() {
+    local PASS=$1
+    # Buscamos en el log de zivpn las ultimas 50 lineas
+    # Buscamos algo que indique actividad. Como zivpn no loguea claro "connect",
+    # buscamos la IP asociada o errores de auth si fuera el caso.
+    # NOTA: Sin acceso al formato exacto de logs de zivpn binario, asumimos busqueda simple.
+    
+    # Intento 1: Buscar ocurrencia literal del pass (Raro que salga en logs por seguridad)
+    # Intento 2: Buscar sesiones activas con 'ss' como backup
+    
+    # Metodo Hibrido:
+    # Si hay conexion activa en SS, es lo mas seguro.
+    # Pero no podemos saber cual pass es cual.
+    
+    # Plan B (Logs): journalctl
+    if [ -z "$PASS" ]; then echo "ERROR: Pass vacio"; return 1; fi
+    
+    # Buscamos ultimas lineas donde aparezca algo relevante
+    local LOGS=$(journalctl -u zivpn -n 100 --no-pager | grep -i "server" | tail -n 5)
+    
+    # Como el binario es cerrado, retornaremos las ultimas lineas de actividad general del servidor
+    # para que el admin deduzca.
+    
+    echo "ACTIVITY_REPORT"
+    echo "$LOGS"
+}
 ENDFUNC
 
 # --- BLOQUE ZIVPN PASS ---
@@ -565,60 +592,114 @@ ENDFUNC
 # --- BLOQUE BADVPN ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 instalar_badvpn() {
-    set -x 
-    # Check rapido si ya existe, intentar reparar
-    if [ -f "/usr/bin/badvpn-udpgw" ]; then
-        echo "Binario detectado. Reconfigurando servicio..."
-    fi
-    # Compilar si no existe (Deps ya instaladas globalmente)
-    if [ ! -f "/usr/bin/badvpn-udpgw" ]; then
-        rm -rf /tmp/build_badvpn
-        mkdir -p /tmp/build_badvpn
-        cd /tmp/build_badvpn
-        wget --no-check-certificate https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz
-        if [ ! -f "1.999.130.tar.gz" ]; then echo "ERROR: Fallo descarga fuente"; return 1; fi
-        tar xf 1.999.130.tar.gz
-        cd badvpn-1.999.130
-        cmake -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
-        make install
-        if [ ! -f "/usr/local/bin/badvpn-udpgw" ] && [ ! -f "/usr/bin/badvpn-udpgw" ]; then
-             find /tmp/build_badvpn -name badvpn-udpgw -exec cp {} /usr/bin/ \;
-        fi
-        [ -f "/usr/local/bin/badvpn-udpgw" ] && cp /usr/local/bin/badvpn-udpgw /usr/bin/
-        cd $PROJECT_DIR
-        rm -rf /tmp/build_badvpn
-    fi
-    
-    if [ ! -f "/usr/bin/badvpn-udpgw" ]; then
-        echo "ERROR: Fallo compilacion badvpn (Binario no encontrado)"
-        return 1
-    fi
-    
-    echo "[Unit]" > /etc/systemd/system/badvpn.service
-    echo "Description=BadVPN UDPGW Service" >> /etc/systemd/system/badvpn.service
-    echo "After=network.target" >> /etc/systemd/system/badvpn.service
-    echo "[Service]" >> /etc/systemd/system/badvpn.service
-    echo "Type=simple" >> /etc/systemd/system/badvpn.service
-    echo "User=root" >> /etc/systemd/system/badvpn.service
-    echo "ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 1000 --max-connections-for-client 10" >> /etc/systemd/system/badvpn.service
-    echo "Restart=always" >> /etc/systemd/system/badvpn.service
-    echo "[Install]" >> /etc/systemd/system/badvpn.service
-    echo "WantedBy=multi-user.target" >> /etc/systemd/system/badvpn.service
+    # Definir variables de color y rutas
+    local C_BOLD='\033[1m'
+    local C_PURPLE='\033[0;35m'
+    local C_RESET='\033[0m'
+    local C_YELLOW='\033[0;33m'
+    local C_GREEN='\033[0;32m'
+    local C_RED='\033[0;31m'
+    local BADVPN_BUILD_DIR="/tmp/badvpn_build"
+    local BADVPN_SERVICE_FILE="/etc/systemd/system/badvpn.service"
 
+    export TERM=xterm
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Installing badvpn (udpgw) ---${C_RESET}"
+    
+    # Detener servicio previo si existe para asegurar instalacion limpia
+    if [ -f "$BADVPN_SERVICE_FILE" ]; then
+        echo -e "${C_YELLOW}ℹ️ Cleaning previous installation...${C_RESET}"
+        systemctl stop badvpn.service 2>/dev/null || true
+        systemctl disable badvpn.service 2>/dev/null || true
+        rm -f "$BADVPN_SERVICE_FILE"
+    fi
+    
+    # Firewall (Simulado)
+    if command -v iptables &> /dev/null; then
+        iptables -I INPUT -p udp --dport 7300 -j ACCEPT 2>/dev/null || true
+    fi
+
+    echo -e "\n${C_GREEN}🔄 Updating package lists...${C_RESET}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    echo -e "\n${C_GREEN}📦 Installing all required packages...${C_RESET}"
+    apt-get install -y cmake g++ make screen git build-essential libssl-dev libnspr4-dev libnss3-dev pkg-config
+    
+    echo -e "\n${C_GREEN}📥 Cloning badvpn from github...${C_RESET}"
+    rm -rf "$BADVPN_BUILD_DIR"
+    git clone https://github.com/ambrop72/badvpn.git "$BADVPN_BUILD_DIR"
+    
+    cd "$BADVPN_BUILD_DIR" || { echo -e "${C_RED}❌ Failed to change directory to build folder.${C_RESET}"; return; }
+    echo -e "\n${C_GREEN}⚙️ Running CMake...${C_RESET}"
+    cmake . || { echo -e "${C_RED}❌ CMake configuration failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
+    echo -e "\n${C_GREEN}🛠️ Compiling source...${C_RESET}"
+    make || { echo -e "${C_RED}❌ Compilation (make) failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
+    
+    local badvpn_binary
+    badvpn_binary=$(find "$BADVPN_BUILD_DIR" -name "badvpn-udpgw" -type f | head -n 1)
+    if [[ -z "$badvpn_binary" || ! -f "$badvpn_binary" ]]; then
+        echo -e "${C_RED}❌ ERROR: Could not find the compiled 'badvpn-udpgw' binary after compilation.${C_RESET}"
+        rm -rf "$BADVPN_BUILD_DIR"
+        return
+    fi
+    echo -e "${C_GREEN}ℹ️ Found binary at: $badvpn_binary${C_RESET}"
+    
+    # Mover a binario del sistema para persistencia
+    cp "$badvpn_binary" /usr/bin/badvpn-udpgw
+    chmod +x /usr/bin/badvpn-udpgw
+    
+    echo -e "\n${C_GREEN}📝 Creating systemd service file...${C_RESET}"
+    cat > "$BADVPN_SERVICE_FILE" <<-EOF
+[Unit]
+Description=BadVPN UDP Gateway
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 8
+User=root
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    echo -e "\n${C_GREEN}▶️ Enabling and starting badvpn service...${C_RESET}"
     systemctl daemon-reload
-    systemctl enable badvpn > /dev/null 2>&1
-    systemctl restart badvpn > /dev/null 2>&1
-    echo "BADVPN_SUCCESS"
-    set +x
+    systemctl enable badvpn.service
+    systemctl start badvpn.service
+    sleep 2
+    if systemctl is-active --quiet badvpn; then
+        echo -e "\n${C_GREEN}✅ SUCCESS: badvpn (udpgw) is installed and active on port 7300.${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ ERROR: badvpn service failed to start.${C_RESET}"
+        echo -e "${C_YELLOW}ℹ️ Displaying last 15 lines of the service log for diagnostics:${C_RESET}"
+        journalctl -u badvpn.service -n 15 --no-pager
+    fi
+    
+    # Limpieza
+    rm -rf "$BADVPN_BUILD_DIR"
 }
 
 eliminar_badvpn() {
-    systemctl stop badvpn > /dev/null 2>&1
-    systemctl disable badvpn > /dev/null 2>&1
-    rm -f /etc/systemd/system/badvpn.service
+    local C_BOLD='\033[1m'
+    local C_PURPLE='\033[0;35m'
+    local C_RESET='\033[0m'
+    local C_YELLOW='\033[0;33m'
+    local C_GREEN='\033[0;32m'
+    local BADVPN_SERVICE_FILE="/etc/systemd/system/badvpn.service"
+
+    echo -e "\n${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling badvpn (udpgw) ---${C_RESET}"
+    if [ ! -f "$BADVPN_SERVICE_FILE" ]; then
+        echo -e "${C_YELLOW}ℹ️ badvpn is not installed, skipping.${C_RESET}"
+        return
+    fi
+    echo -e "${C_GREEN}🛑 Stopping and disabling badvpn service...${C_RESET}"
+    systemctl stop badvpn.service >/dev/null 2>&1
+    systemctl disable badvpn.service >/dev/null 2>&1
+    echo -e "${C_GREEN}🗑️ Removing systemd service file...${C_RESET}"
+    rm -f "$BADVPN_SERVICE_FILE"
     rm -f /usr/bin/badvpn-udpgw
     systemctl daemon-reload
-    echo "BADVPN_REMOVED"
+    echo -e "${C_GREEN}✅ badvpn has been uninstalled successfully.${C_RESET}"
 }
 ENDFUNC
 
@@ -628,28 +709,61 @@ ENDFUNC
 # --- BLOQUE DROPBEAR ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 instalar_dropbear() {
-    set -x
     local PORT=$1
+    if [ -z "$PORT" ]; then echo "ERROR: Falta puerto"; return 1; fi
+    
+    # Instalar Paquete
     apt-get update -y > /dev/null 2>&1
     apt-get install dropbear -y > /dev/null 2>&1
-    if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null ; then echo "ERROR: Puerto $PORT ocupado"; return 1; fi
-    systemctl stop dropbear > /dev/null 2>&1
-    echo "[Unit]" > /lib/systemd/system/dropbear.service
-    echo "Description=Dropbear SSH Daemon" >> /lib/systemd/system/dropbear.service
-    echo "After=network.target" >> /lib/systemd/system/dropbear.service
-    echo "[Service]" >> /lib/systemd/system/dropbear.service
-    echo "Type=simple" >> /lib/systemd/system/dropbear.service
-    echo "ExecStart=/usr/sbin/dropbear -F -p $PORT -K 60" >> /lib/systemd/system/dropbear.service
-    echo "KillMode=process" >> /lib/systemd/system/dropbear.service
-    echo "Restart=always" >> /lib/systemd/system/dropbear.service
-    echo "[Install]" >> /lib/systemd/system/dropbear.service
-    echo "WantedBy=multi-user.target" >> /lib/systemd/system/dropbear.service
+    
+    # Validar puerto
+    if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null; then 
+        echo "ERROR: Puerto $PORT ocupado"
+        return 1
+    fi
+
+    # Asegurar directorio y keys
+    mkdir -p /etc/dropbear
+    if [ ! -f /etc/dropbear/dropbear_rsa_host_key ]; then
+        dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
+    fi
+    if [ ! -f /etc/dropbear/dropbear_ecdsa_host_key ]; then
+        dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
+    fi
+
+    # Detener servicio default que instala apt
+    systemctl stop dropbear >/dev/null 2>&1 || true
+    systemctl disable dropbear >/dev/null 2>&1 || true
+    
+    # Crear servicio custom (evita conflicto con actualizaciones)
+    local SVC_FILE="/etc/systemd/system/dropbear_custom.service"
+    
+    cat <<EOF > "$SVC_FILE"
+[Unit]
+Description=Dropbear Custom SSH
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dropbear -F -p $PORT -K 60 -r /etc/dropbear/dropbear_rsa_host_key -r /etc/dropbear/dropbear_ecdsa_host_key
+KillMode=process
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     systemctl daemon-reload
-    systemctl enable dropbear > /dev/null 2>&1
-    systemctl restart dropbear > /dev/null 2>&1
+    systemctl enable dropbear_custom
+    systemctl restart dropbear_custom
+    
     sleep 2
-    if systemctl is-active dropbear > /dev/null 2>&1; then echo "DROPBEAR_SUCCESS|$PORT"; else echo "ERROR: Fallo arranque servicio"; fi
-    set +x
+    if systemctl is-active dropbear_custom > /dev/null 2>&1; then 
+        echo "DROPBEAR_SUCCESS|$PORT"
+    else 
+        echo "ERROR: Fallo arranque servicio. Logs:"
+        journalctl -u dropbear_custom -n 10 --no-pager
+    fi
 }
 
 eliminar_dropbear() {
@@ -677,6 +791,7 @@ case "$1" in
     eliminar_banner) eliminar_banner ;;
     instalar_zivpn) instalar_zivpn ;;
     gestionar_zivpn_pass) gestionar_zivpn_pass "$2" "$3" ;;
+    verificar_zivpn_user) verificar_zivpn_user "$2" ;;
     monitor_zivpn) monitor_zivpn ;;
     eliminar_zivpn) eliminar_zivpn ;;
     instalar_badvpn) instalar_badvpn ;;
@@ -689,9 +804,9 @@ chmod +x ssh_manager.sh
 
 
 # ---------------------------------------------------------
-# 2. Bot de Python V6.5 (PRO CUSTOM)
+# 2. Bot de Python V6.6 (PRO CUSTOM)
 # ---------------------------------------------------------
-log_info "Creando bot V6.5 (Static IP + Zivpn Support)..."
+log_info "Creando bot V6.6 (Static IP + Zivpn Support)..."
 cat << 'EOF' > depwise_bot.py
 # -*- coding: utf-8 -*-
 import telebot
@@ -774,6 +889,7 @@ def load_data():
         if 'zivpn_users' not in data: data['zivpn_users'] = {}
         if 'zivpn_owners' not in data: data['zivpn_owners'] = {}
         if 'cloudflare_domain' not in data: data['cloudflare_domain'] = ""
+        if 'cloudfront_domain' not in data: data['cloudfront_domain'] = ""
         # Nuevos protocolos
         if 'badvpn' not in data: data['badvpn'] = False
         if 'dropbear' not in data: data['dropbear'] = 0
@@ -790,7 +906,8 @@ def load_data():
             "proxydt": {"ports": {}, "token": "V55cFY8zTictLCPfviiuX5DHjs15"}, 
             "zivpn_users": {},
             "zivpn_owners": {},
-            "cloudflare_domain": ""
+            "cloudflare_domain": "",
+            "cloudfront_domain": ""
         }
 
 def save_data(data):
@@ -850,7 +967,7 @@ def main_menu(chat_id, message_id=None):
             types.InlineKeyboardButton(ICON_GEAR + " Monitor Online", callback_data="menu_online")
         )
     
-    text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.5</b>\n"
+    text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.6</b>\n"
     if not data.get('public_access', True): text += ICON_LOCK + " <i>Acceso Público: Desactivado</i>\n"
     
     if message_id:
@@ -912,6 +1029,7 @@ def callback_query(call):
         data = load_data()
         extra = data.get('extra_info', '')
         domain = data.get('cloudflare_domain', '')
+        cfront = data.get('cloudfront_domain', '')
         
         text = ICON_INFO + " <b>DATOS DEL SERVIDOR</b>\n\n"
         text += ICON_PIN + " <b>IP Fija:</b> <code>" + ip + "</code> \n"
@@ -919,6 +1037,10 @@ def callback_query(call):
         # Mostrar dominio Cloudflare si existe
         if domain:
             text += "🌐 <b>Dominio:</b> <code>" + domain + "</code> \n"
+            
+        # Mostrar dominio CloudFront si existe
+        if cfront:
+            text += "☁️ <b>CloudFront:</b> <code>" + cfront + "</code> \n"
         
         # Datos SlowDNS si existen
         sdns = data.get('slowdns', {})
@@ -1003,17 +1125,72 @@ def callback_query(call):
     elif call.data == "menu_protocols" and chat_id == SUPER_ADMIN:
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("🚀 Instalar SlowDNS", callback_data="install_slowdns"),
+            types.InlineKeyboardButton("🚀 SlowDNS", callback_data="menu_slowdns"),
             types.InlineKeyboardButton("🛰️ ProxyDT-Go / Websock", callback_data="menu_proxydt"),
-            types.InlineKeyboardButton("📡 UDP ZIVPN (Nuevo)", callback_data="zivpn_install"),
+            types.InlineKeyboardButton("📡 UDP ZIVPN", callback_data="menu_zivpn"),
             types.InlineKeyboardButton(ICON_PHONE + " BadVPN (Llamadas)", callback_data="badvpn_menu"),
             types.InlineKeyboardButton(ICON_BEAR + " Dropbear (SSH Mini)", callback_data="dropbear_menu"),
-            types.InlineKeyboardButton(ICON_DEL + " Eliminar SlowDNS", callback_data="remove_slowdns"),
-            types.InlineKeyboardButton(ICON_DEL + " Eliminar ProxyDT / Websock", callback_data="proxydt_remove"),
-            types.InlineKeyboardButton(ICON_DEL + " Eliminar UDP ZIVPN", callback_data="zivpn_remove"),
             types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
         )
         bot.edit_message_text(ICON_GEAR + " <b>GESTIÓN DE PROTOCOLOS</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    elif call.data == "menu_slowdns" and chat_id == SUPER_ADMIN:
+        d = load_data()
+        is_inst = d.get('slowdns', {}).get('key')
+        st = "INSTALADO" if is_inst else "NO INSTALADO"
+        markup = types.InlineKeyboardMarkup()
+        if not is_inst:
+            markup.add(types.InlineKeyboardButton("Instalar SlowDNS", callback_data="install_slowdns"))
+        else:
+            markup.add(types.InlineKeyboardButton("Info SlowDNS", callback_data="menu_info"))
+            markup.add(types.InlineKeyboardButton("Eliminar SlowDNS", callback_data="remove_slowdns"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
+        bot.edit_message_text(f"🚀 <b>Gestión SlowDNS</b>\nEstado: {st}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "menu_zivpn" and chat_id == SUPER_ADMIN:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Instalar ZIVPN", callback_data="zivpn_install"))
+        markup.add(types.InlineKeyboardButton("🔍 Verificar Actividad", callback_data="zivpn_check_menu"))
+        markup.add(types.InlineKeyboardButton("Eliminar ZIVPN", callback_data="zivpn_remove"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
+        bot.edit_message_text(f"📡 <b>Gestión ZIVPN</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    elif call.data == "zivpn_check_menu" and chat_id == SUPER_ADMIN:
+        data = load_data()
+        zivpn = data.get('zivpn_users', {})
+        if not zivpn:
+            bot.answer_callback_query(call.id, "No hay passwords creados.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        keys = list(zivpn.keys())
+        # Mostrar botones para los primeros 8 passwords para no saturar
+        for pwd in keys[:8]:
+            markup.add(types.InlineKeyboardButton(f"🔑 {pwd}", callback_data=f"chk_zi_{pwd}"))
+            
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_zivpn"))
+        bot.edit_message_text("🔍 <b>Selecciona Password a Verificar:</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    elif call.data.startswith("chk_zi_") and chat_id == SUPER_ADMIN:
+        pwd = call.data.replace("chk_zi_", "")
+        bot.answer_callback_query(call.id, f"🔍 Revisando logs para {pwd}...")
+        
+        # Ejecutar chequeo
+        res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'verificar_zivpn_user', pwd], capture_output=True, text=True)
+        
+        log_content = "Sin datos"
+        if "ACTIVITY_REPORT" in res.stdout:
+            log_content = res.stdout.replace("ACTIVITY_REPORT", "").strip()
+        
+        if not log_content: log_content = "Sin actividad reciente en logs."
+        
+        safe_log = html_lib.escape(log_content)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="zivpn_check_menu"))
+        
+        msg = f"🔍 <b>REPORTE DE ACTIVIDAD ({pwd})</b>\n\n"
+        msg += f"<i>Últimos eventos del servidor:</i>\n<pre>{safe_log}</pre>\n\n"
+        msg += "⚠️ <i>Nota: ZIVPN encripta el tráfico, el log muestra actividad general del puerto 5667.</i>"
+        
+        bot.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
     elif call.data == "badvpn_menu":
         # BadVPN Handlers
         d = load_data()
@@ -1156,6 +1333,11 @@ def callback_query(call):
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_admins"))
         bot.edit_message_text("🌐 <b>Configura tu Dominio Cloudflare:</b>\n\nIntroduce el dominio (ej: vpn.tudominio.com)\nO escribe 'borrar' para eliminarlo.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         bot.register_next_step_handler(call.message, process_domain)
+    elif call.data == "set_cloudfront" and chat_id == SUPER_ADMIN:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_admins"))
+        bot.edit_message_text("☁️ <b>Configura tu Dominio CloudFront:</b>\n\nIntroduce el dominio (ej: d1234.cloudfront.net)\nO escribe 'borrar' para eliminarlo.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, process_cloudfront)
     elif call.data == "admin_del":
         data = load_data(); admins = data.get('admins', {})
         text = "ADMINS:\n"
@@ -1172,6 +1354,7 @@ def show_pro_settings(chat_id, message_id):
     data = load_data()
     status = (ICON_UNLOCK + " Acceso Publico: ON") if data.get('public_access', True) else (ICON_LOCK + " Acceso Publico: OFF")
     domain_status = f"🌐 Dominio: {data.get('cloudflare_domain', 'No configurado')}"
+    cf_status = f"☁️ CloudFront: {data.get('cloudfront_domain', 'No configurado')}"
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton(status, callback_data="toggle_public"),
@@ -1179,6 +1362,7 @@ def show_pro_settings(chat_id, message_id):
         types.InlineKeyboardButton(ICON_DEL + " Eliminar Admin", callback_data="admin_del"),
         types.InlineKeyboardButton(ICON_WRITE + " Editar Info Extra", callback_data="set_edit_info"),
         types.InlineKeyboardButton(domain_status, callback_data="set_domain"),
+        types.InlineKeyboardButton(cf_status, callback_data="set_cloudfront"),
         types.InlineKeyboardButton(ICON_MEGA + " Banner SSH (Nuevo)", callback_data="menu_banner"),
         types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
     )
@@ -1193,15 +1377,39 @@ def process_domain(message):
     delete_user_msg(message)
     domain = message.text.strip().lower()
     data = load_data()
+    msg = None
     if domain == 'borrar':
         data['cloudflare_domain'] = ""
         save_data(data)
-        bot.send_message(message.chat.id, "✅ <b>Dominio eliminado correctamente.</b>", parse_mode='HTML')
+        msg = bot.send_message(message.chat.id, "✅ <b>Dominio eliminado correctamente.</b>", parse_mode='HTML')
     else:
         data['cloudflare_domain'] = domain
         save_data(data)
-        bot.send_message(message.chat.id, f"✅ <b>Dominio configurado:</b> <code>{domain}</code>", parse_mode='HTML')
+        msg = bot.send_message(message.chat.id, f"✅ <b>Dominio configurado:</b> <code>{domain}</code>", parse_mode='HTML')
+    
     show_pro_settings(message.chat.id, USER_STEPS.get(message.chat.id))
+    time.sleep(3)
+    try: bot.delete_message(message.chat.id, msg.message_id)
+    except: pass
+
+def process_cloudfront(message):
+    delete_user_msg(message)
+    domain = message.text.strip().lower()
+    data = load_data()
+    msg = None
+    if domain == 'borrar':
+        data['cloudfront_domain'] = ""
+        save_data(data)
+        msg = bot.send_message(message.chat.id, "✅ <b>CloudFront eliminado.</b>", parse_mode='HTML')
+    else:
+        data['cloudfront_domain'] = domain
+        save_data(data)
+        msg = bot.send_message(message.chat.id, f"✅ <b>CloudFront configurado:</b> <code>{domain}</code>", parse_mode='HTML')
+    
+    show_pro_settings(message.chat.id, USER_STEPS.get(message.chat.id))
+    time.sleep(3)
+    try: bot.delete_message(message.chat.id, msg.message_id)
+    except: pass
 
 def process_admin_id(message):
     delete_user_msg(message)
@@ -1336,6 +1544,7 @@ def show_proxydt_menu(chat_id, msg_id):
         types.InlineKeyboardButton("⬇️ Instalar Binario Cracked", callback_data="proxydt_install"),
         types.InlineKeyboardButton("🟢 Abrir Puerto", callback_data="proxydt_open"),
         types.InlineKeyboardButton("🔴 Cerrar Puerto", callback_data="proxydt_close"),
+        types.InlineKeyboardButton("🗑️ Eliminar ProxyDT", callback_data="proxydt_remove"),
         types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols")
     )
     if msg_id:
@@ -1510,14 +1719,17 @@ def finalize_ssh(message, user, days=None):
             data = load_data()
             extra = data.get('extra_info', '')
             domain = data.get('cloudflare_domain', '')
+            cfront = data.get('cloudfront_domain', '')
             # Extraer fecha de res.stdout
             try: dt = res.stdout.strip().split('|')[2]
             except: dt = "Indefinida"
             
-            msg = ICON_CHECK + " <b>BOT TELEGRAM DEPWISE V6.5</b>\n--------------------------------------\n"
+            msg = ICON_CHECK + " <b>BOT TELEGRAM DEPWISE V6.6</b>\n--------------------------------------\n"
             msg += ICON_PIN + " <b>HOST IP:</b> <code>" + ip + "</code> \n"
             if domain:
                 msg += "🌐 <b>DOMINIO:</b> <code>" + domain + "</code> \n"
+            if cfront:
+                msg += "☁️ <b>CLOUDFRONT:</b> <code>" + cfront + "</code> \n"
             if extra: msg += safe_format(extra) + "\n"
             msg += "<b>USER:</b> <code>" + user + "</code> \n<b>PASS:</b> <code>" + pwd + "</code> \n"
             
