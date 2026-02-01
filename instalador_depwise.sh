@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =========================================================
-# INSTALADOR UNIVERSAL V6.6: BOT TELEGRAM DEPWISE SSH 💎
+# INSTALADOR UNIVERSAL V6.7: BOT TELEGRAM DEPWISE SSH 💎
 # =========================================================
 # - FIX: IP Fija e Imborrable (Deteccion Automatica)
 # - FIX: Info Personalizada con Soporte Markdown (Copiable)
@@ -36,7 +36,7 @@ elif [ -f "$PROJECT_DIR/depwise_bot.py" ]; then
 fi
 
 echo -e "${GREEN}=================================================="
-echo -e "       CONFIGURACION BOT DEPWISE V6.6"
+echo -e "       CONFIGURACION BOT DEPWISE V6.7"
 echo -e "==================================================${NC}"
 
 read -p "Introduce el TOKEN [${OLD_TOKEN:-}]: " BOT_TOKEN
@@ -932,9 +932,9 @@ chmod +x ssh_manager.sh
 
 
 # ---------------------------------------------------------
-# 2. Bot de Python V6.6 (PRO CUSTOM)
+# 2. Bot de Python V6.7 (PRO CUSTOM)
 # ---------------------------------------------------------
-log_info "Creando bot V6.6 (Static IP + Zivpn Support)..."
+log_info "Creando bot V6.7 (Static IP + Zivpn Support)..."
 cat << 'EOF' > depwise_bot.py
 # -*- coding: utf-8 -*-
 import telebot
@@ -1080,10 +1080,23 @@ def main_menu(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(ICON_USER + " Crear SSH", callback_data="menu_crear"),
-        types.InlineKeyboardButton("✏️ Editar SSH", callback_data="menu_editar"),
-        types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar"),
         types.InlineKeyboardButton(ICON_INFO + " Info Servidor", callback_data="menu_info")
     )
+    # Solo Admins y Super Admin pueden editar/eliminar
+    if is_adm or is_sa:
+        markup.add(
+            types.InlineKeyboardButton("✏️ Editar SSH", callback_data="menu_editar"),
+            types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar")
+        )
+    else:
+         # Publico solo puede eliminar sus propios (si se desea) o nada.
+         # El usuario pidio restringir "Editar". Por consistencia, si no ven editar, quizas "Eliminar" tambien deberia ser restringido o separado.
+         # Pero el requerimiento fue especifico sobre "Editar". Mantenemos Eliminar?
+         # "que solo el super admin y los admin tengan acceso , el publico en general no" -> refiriendose al boton de editar.
+         # Dejaremos Eliminar visible para publico (para que borren sus cuentas si quieren) o lo muevo?
+         # La estructura original tenia todo junto. Voy a separar Editar para cumplir el request.
+         # El codigo original tenia Eliminar disponible.
+         markup.add(types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar"))
     if is_sa:
         markup.add(
             types.InlineKeyboardButton(ICON_MEGA + " Mensaje Global", callback_data="menu_broadcast"),
@@ -1098,7 +1111,7 @@ def main_menu(chat_id, message_id=None):
             types.InlineKeyboardButton(ICON_GEAR + " Monitor Online", callback_data="menu_online")
         )
     
-    text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.6</b>\n"
+    text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n"
     if not data.get('public_access', True): text += ICON_LOCK + " <i>Acceso Público: Desactivado</i>\n"
     
     if message_id:
@@ -1158,6 +1171,9 @@ def callback_query(call):
 
     # --- MENU EDITAR ---
     elif call.data == "menu_editar":
+        if not is_admin(chat_id) and chat_id != SUPER_ADMIN:
+             bot.answer_callback_query(call.id, "⛔ Acceso denegado: Solo Admins.", show_alert=True)
+             return
         is_sa = (chat_id == SUPER_ADMIN)
         data = load_data()
         user_list = []
@@ -2099,6 +2115,13 @@ def process_edit_renew(message, user):
         msg_id = USER_STEPS.get(chat_id)
         
         cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'renovar_user', user, str(days)]
+        
+        # Validacion Límite 7 dias para Admins no-Super
+        if chat_id != SUPER_ADMIN and days > 7:
+            bot.send_message(chat_id, "❌ <b>Límite excedido:</b> Como Admin solo puedes renovar hasta 7 días.", parse_mode='HTML')
+            main_menu(chat_id, msg_id)
+            return
+
         res = subprocess.run(cmd, capture_output=True, text=True)
         
         if "USER_RENEWED" in res.stdout:
