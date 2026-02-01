@@ -54,9 +54,11 @@ fi
 mkdir -p "$PROJECT_DIR"
 echo "OLD_TOKEN=\"$BOT_TOKEN\"" > "$ENV_FILE"
 echo "OLD_ADMIN=\"$ADMIN_ID\"" >> "$ENV_FILE"
+chmod 600 "$ENV_FILE"
 
 log_info "Instalando dependencias (Core + Build Tools)..."
-apt update && apt install -y python3 python3-pip curl python3-requests file net-tools lsof cmake make gcc g++ git
+log_info "Instalando dependencias (Core + Build Tools)..."
+apt update && apt install -y python3 python3-pip curl python3-requests file net-tools lsof cmake make gcc g++ git jq
 pip3 install pytelegrambotapi --break-system-packages --upgrade 2>/dev/null || pip3 install pytelegrambotapi --upgrade
 
 cd $PROJECT_DIR
@@ -154,6 +156,25 @@ contar_conexiones() {
     ps aux | grep sshd | grep -v root | grep -v grep | awk '{print $1}' | sort | uniq -c | while read count user; do
         echo "- $user: $count conectado(s)"
     done
+}
+
+modificar_password() {
+    local USER=$1
+    local PASS=$2
+    if [ -z "$USER" ] || [ -z "$PASS" ]; then echo "ERROR: Args missing"; return 1; fi
+    
+    echo "$USER:$PASS" | chpasswd
+    if [ $? -eq 0 ]; then echo "PASS_UPDATED"; else echo "ERROR"; fi
+}
+
+renovar_user() {
+   local USER=$1
+   local DAYS=$2
+   if [ -z "$USER" ] || [ -z "$DAYS" ]; then echo "ERROR: Args missing"; return 1; fi
+   
+   local EXP_DATE=$(date -d "+$DAYS days" +%Y-%m-%d)
+   usermod -e "$EXP_DATE" "$USER"
+   if [ $? -eq 0 ]; then echo "USER_RENEWED|$EXP_DATE"; else echo "ERROR"; fi
 }
 ENDFUNC
 
@@ -323,6 +344,14 @@ instalar_proxydt() {
         MIRRORS=("https://github.com/zahidbd2/udp-zivpn/releases/download/latest/udp-zivpn-linux-arm64" "${MIRRORS[@]}")
     fi
 
+    # Check existing binary
+    if [ -f "/usr/bin/proxydt" ] && [ -x "/usr/bin/proxydt" ]; then
+        echo "Binario detectado. Saltando descarga..." >> /tmp/proxydt_install.log
+        echo "PROXYDT_SUCCESS|Existente"
+        rm -f /tmp/proxydt_install.log /tmp/libssl1.1.deb
+        return 0
+    fi
+
     echo "Eliminando versiones previas..." >> /tmp/proxydt_install.log
     rm -f /usr/bin/proxydt /usr/bin/proxy
     
@@ -449,8 +478,13 @@ instalar_zivpn() {
     if [[ -z "$BIN_URL" ]]; then echo "ERROR: Arquitectura no soportada"; return 1; fi
 
     echo "Bajando binario Zivpn..." > /tmp/zivpn_install.log
-    curl -L -s -f -o /usr/local/bin/zivpn "$BIN_URL"
-    chmod +x /usr/local/bin/zivpn
+    
+    if [ -f "/usr/local/bin/zivpn" ] && [ -x "/usr/local/bin/zivpn" ]; then
+         echo "Binario Zivpn detectado. Saltando descarga." >> /tmp/zivpn_install.log
+    else
+         curl -L -s -f -o /usr/local/bin/zivpn "$BIN_URL"
+         chmod +x /usr/local/bin/zivpn
+    fi
     mkdir -p /etc/zivpn
     curl -L -s -f -o /etc/zivpn/config.json "https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/config.json"
     
@@ -480,6 +514,7 @@ instalar_zivpn() {
     iptables -t nat -A PREROUTING -i "$DEV" -p udp --dport 6000:19999 -j DNAT --to-destination :5667
     
     echo "ZIVPN_SUCCESS"
+    rm -f /tmp/zivpn_install.log
 }
 
 eliminar_zivpn() {
@@ -624,28 +659,32 @@ instalar_badvpn() {
     echo -e "\n${C_GREEN}📦 Installing all required packages...${C_RESET}"
     apt-get install -y cmake g++ make screen git build-essential libssl-dev libnspr4-dev libnss3-dev pkg-config
     
-    echo -e "\n${C_GREEN}📥 Cloning badvpn from github...${C_RESET}"
-    rm -rf "$BADVPN_BUILD_DIR"
-    git clone https://github.com/ambrop72/badvpn.git "$BADVPN_BUILD_DIR"
-    
-    cd "$BADVPN_BUILD_DIR" || { echo -e "${C_RED}❌ Failed to change directory to build folder.${C_RESET}"; return; }
-    echo -e "\n${C_GREEN}⚙️ Running CMake...${C_RESET}"
-    cmake . || { echo -e "${C_RED}❌ CMake configuration failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
-    echo -e "\n${C_GREEN}🛠️ Compiling source...${C_RESET}"
-    make || { echo -e "${C_RED}❌ Compilation (make) failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
-    
-    local badvpn_binary
-    badvpn_binary=$(find "$BADVPN_BUILD_DIR" -name "badvpn-udpgw" -type f | head -n 1)
-    if [[ -z "$badvpn_binary" || ! -f "$badvpn_binary" ]]; then
-        echo -e "${C_RED}❌ ERROR: Could not find the compiled 'badvpn-udpgw' binary after compilation.${C_RESET}"
+    if [ -f "/usr/bin/badvpn-udpgw" ]; then
+        echo -e "${C_GREEN}✅ Binario badvpn detectado. Saltando compilacion.${C_RESET}"
+    else
+        echo -e "\n${C_GREEN}📥 Cloning badvpn from github...${C_RESET}"
         rm -rf "$BADVPN_BUILD_DIR"
-        return
+        git clone https://github.com/ambrop72/badvpn.git "$BADVPN_BUILD_DIR"
+        
+        cd "$BADVPN_BUILD_DIR" || { echo -e "${C_RED}❌ Failed to change directory to build folder.${C_RESET}"; return; }
+        echo -e "\n${C_GREEN}⚙️ Running CMake...${C_RESET}"
+        cmake . || { echo -e "${C_RED}❌ CMake configuration failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
+        echo -e "\n${C_GREEN}🛠️ Compiling source...${C_RESET}"
+        make || { echo -e "${C_RED}❌ Compilation (make) failed.${C_RESET}"; rm -rf "$BADVPN_BUILD_DIR"; return; }
+        
+        local badvpn_binary
+        badvpn_binary=$(find "$BADVPN_BUILD_DIR" -name "badvpn-udpgw" -type f | head -n 1)
+        if [[ -z "$badvpn_binary" || ! -f "$badvpn_binary" ]]; then
+            echo -e "${C_RED}❌ ERROR: Could not find the compiled 'badvpn-udpgw' binary after compilation.${C_RESET}"
+            rm -rf "$BADVPN_BUILD_DIR"
+            return
+        fi
+        echo -e "${C_GREEN}ℹ️ Found binary at: $badvpn_binary${C_RESET}"
+        
+        # Mover a binario del sistema para persistencia
+        cp "$badvpn_binary" /usr/bin/badvpn-udpgw
+        chmod +x /usr/bin/badvpn-udpgw
     fi
-    echo -e "${C_GREEN}ℹ️ Found binary at: $badvpn_binary${C_RESET}"
-    
-    # Mover a binario del sistema para persistencia
-    cp "$badvpn_binary" /usr/bin/badvpn-udpgw
-    chmod +x /usr/bin/badvpn-udpgw
     
     echo -e "\n${C_GREEN}📝 Creating systemd service file...${C_RESET}"
     cat > "$BADVPN_SERVICE_FILE" <<-EOF
@@ -774,6 +813,91 @@ eliminar_dropbear() {
 }
 ENDFUNC
 
+# --- BLOQUE FALCON PROXY ---
+cat << 'ENDFUNC' >> ssh_manager.sh
+instalar_falcon_proxy() {
+    local PORT=$1
+    if [ -z "$PORT" ]; then echo "ERROR: Falta puerto"; return 1; fi
+
+    local ARCH=$(uname -m)
+    local BIN_NAME=""
+    if [[ "$ARCH" == "x86_64" ]]; then BIN_NAME="falconproxy"; 
+    elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then BIN_NAME="falconproxyarm";
+    else echo "ERROR: Arquitectura no soportada"; return 1; fi
+    
+    # Intentar obtener la URL de descarga via API GitHub
+    local API_URL="https://api.github.com/repos/firewallfalcons/FirewallFalcon-Manager/releases/latest"
+    local DOWN_URL=""
+    local VER=""
+    
+    if command -v jq &> /dev/null; then
+        local JSON=$(curl -s "$API_URL")
+        VER=$(echo "$JSON" | jq -r .tag_name)
+        DOWN_URL=$(echo "$JSON" | jq -r ".assets[] | select(.name == \"$BIN_NAME\") | .browser_download_url")
+    fi
+    
+    # Fallback si falla jq o api rate limit
+    if [ -z "$DOWN_URL" ] || [ "$DOWN_URL" == "null" ]; then
+        echo "ERROR: No se pudo obtener la ultima version desde GitHub."
+        return 1
+    fi
+    
+    echo "Instalando Falcon Proxy ($VER) en puerto $PORT..." > /tmp/falcon_install.log
+    
+    # Check existing binary
+    if [ -f "/usr/local/bin/falconproxy" ]; then
+        echo "Binario detectado. Reemplazando..." >> /tmp/falcon_install.log
+    fi
+
+    wget -q -O /usr/local/bin/falconproxy "$DOWN_URL"
+    if [ $? -ne 0 ]; then echo "ERROR: Fallo descarga del binario"; rm -f /tmp/falcon_install.log; return 1; fi
+    chmod +x /usr/local/bin/falconproxy
+    
+    # Config File
+    echo "PORTS=\"$PORT\"" > /etc/falconproxy.conf
+    echo "INSTALLED_VERSION=\"$VER\"" >> /etc/falconproxy.conf
+    
+    # Servicio Systemd
+    cat <<EOF > /etc/systemd/system/falconproxy.service
+[Unit]
+Description=Falcon Proxy ($VER)
+After=network.target
+
+[Service]
+User=root
+Type=simple
+ExecStart=/usr/local/bin/falconproxy -p $PORT
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable falconproxy
+    systemctl restart falconproxy
+    
+    sleep 2
+    if systemctl is-active --quiet falconproxy; then
+        echo "FALCON_SUCCESS|$VER|$PORT"
+    else
+        echo "ERROR: El servicio no arranco. Ver logs."
+    fi
+    rm -f /tmp/falcon_install.log
+}
+
+eliminar_falcon_proxy() {
+    systemctl stop falconproxy >/dev/null 2>&1
+    systemctl disable falconproxy >/dev/null 2>&1
+    rm -f /etc/systemd/system/falconproxy.service
+    rm -f /usr/local/bin/falconproxy
+    rm -f /etc/falconproxy.conf
+    systemctl daemon-reload
+    echo "FALCON_REMOVED"
+}
+ENDFUNC
+
 # --- CASE PRINCIPAL ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 case "$1" in
@@ -781,6 +905,8 @@ case "$1" in
     eliminar_user) eliminar_user "$2" ;;
     listar_users) listar_users ;;
     contar_conexiones) contar_conexiones ;;
+    modificar_password) modificar_password "$2" "$3" ;;
+    renovar_user) renovar_user "$2" "$3" ;;
     instalar_slowdns) instalar_slowdns "$2" "$3" ;;
     eliminar_slowdns) eliminar_slowdns ;;
     instalar_proxydt) instalar_proxydt ;;
@@ -798,6 +924,8 @@ case "$1" in
     eliminar_badvpn) eliminar_badvpn ;;
     instalar_dropbear) instalar_dropbear "$2" ;;
     eliminar_dropbear) eliminar_dropbear ;;
+    instalar_falcon_proxy) instalar_falcon_proxy "$2" ;;
+    eliminar_falcon_proxy) eliminar_falcon_proxy ;;
 esac
 ENDFUNC
 chmod +x ssh_manager.sh
@@ -813,6 +941,7 @@ import telebot
 from telebot import types
 import subprocess
 import json
+import zipfile
 import os
 import requests
 import string
@@ -924,6 +1053,7 @@ def safe_format(text):
 
 # Rastreo de mensajes para limpieza
 USER_STEPS = {}
+TEMP_SSH_CREATION = {}
 
 def is_admin(chat_id):
     if chat_id == SUPER_ADMIN: return True
@@ -950,6 +1080,7 @@ def main_menu(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(ICON_USER + " Crear SSH", callback_data="menu_crear"),
+        types.InlineKeyboardButton("✏️ Editar SSH", callback_data="menu_editar"),
         types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar"),
         types.InlineKeyboardButton(ICON_INFO + " Info Servidor", callback_data="menu_info")
     )
@@ -1024,6 +1155,79 @@ def callback_query(call):
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
         bot.edit_message_text(ICON_USER + " <b>ELIMINAR ACCESOS:</b>\n\n<b>SSH:</b>\n" + users + "\n\nEscribe nombre:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         bot.register_next_step_handler(call.message, process_delete)
+
+    # --- MENU EDITAR ---
+    elif call.data == "menu_editar":
+        is_sa = (chat_id == SUPER_ADMIN)
+        data = load_data()
+        user_list = []
+        
+        if is_sa:
+            # Super Admin ve todos
+            res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'listar_users'], capture_output=True, text=True)
+            raw = res.stdout.replace("USERS_LIST:", "").strip()
+            if raw and raw != "Vacio":
+                for line in raw.split('\n'):
+                     # line format: "- username (Vence:XXXX)"
+                     try: user_list.append(line.split(' ')[1])
+                     except: pass
+        else:
+             # Filtrar solo los del usuario actual
+            owners = data.get('ssh_owners', {})
+            user_list = [u for u, owner in owners.items() if str(owner) == str(chat_id)]
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        if not user_list:
+             markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+             bot.edit_message_text("❌ No tienes usuarios para editar.", chat_id, msg_id, reply_markup=markup)
+             return
+
+        for u in user_list:
+            markup.add(types.InlineKeyboardButton(f"👤 {u}", callback_data=f"edit_sel_{u}"))
+        
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+        bot.edit_message_text("✏️ <b>EDITAR USUARIO SSH:</b>\nSelecciona uno:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data.startswith("edit_sel_"):
+        user = call.data.replace("edit_sel_", "")
+        TEMP_SSH_CREATION[chat_id] = {'user': user} # Reusamos dict temporal
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🔑 Cambiar Contraseña", callback_data=f"edit_pass_{user}"),
+            types.InlineKeyboardButton("📅 Renovar Días", callback_data=f"edit_renew_{user}")
+        )
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_editar"))
+        bot.edit_message_text(f"⚙️ <b>Editando:</b> <code>{user}</code>\n¿Qué deseas hacer?", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    
+    elif call.data.startswith("edit_pass_"):
+        user = call.data.replace("edit_pass_", "")
+        # Preguntar modo password
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🎲 Automática", callback_data=f"ep_auto_{user}"),
+                   types.InlineKeyboardButton("✍️ Manual", callback_data=f"ep_man_{user}"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data=f"edit_sel_{user}"))
+        bot.edit_message_text(f"🔑 <b>Cambio de Password para {user}:</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data.startswith("ep_auto_"):
+        user = call.data.replace("ep_auto_", "")
+        new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+        perform_edit_pass(chat_id, user, new_pass)
+        
+    elif call.data.startswith("ep_man_"):
+        user = call.data.replace("ep_man_", "")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data=f"edit_sel_{user}"))
+        bot.edit_message_text(f"✍️ <b>Escribe el nuevo Password para {user}:</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, lambda m: process_edit_pass_manual(m, user))
+
+    elif call.data.startswith("edit_renew_"):
+        user = call.data.replace("edit_renew_", "")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data=f"edit_sel_{user}"))
+        bot.edit_message_text(f"📅 <b>Renovar {user}:</b>\n¿Cuántos días quieres sumar/asignar?", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, lambda m: process_edit_renew(m, user))
+
     elif call.data == "menu_info":
         ip = get_public_ip()
         data = load_data()
@@ -1070,6 +1274,15 @@ def callback_query(call):
         # Info de Nuevos Protocolos
         if data.get('badvpn'): text += "\n" + ICON_PHONE + " <b>BadVPN:</b> <code>7300</code> (Activo)"
         if data.get('dropbear'): text += "\n" + ICON_BEAR + " <b>Dropbear:</b> <code>" + str(data.get('dropbear')) + "</code>"
+        # Falcon Proxy Info
+        if os.path.exists("/etc/falconproxy.conf"):
+            try: 
+                with open("/etc/falconproxy.conf") as f: 
+                    fc = f.read(); 
+                    if "PORTS" in fc: 
+                        fp = fc.split('PORTS="')[1].split('"')[0]
+                        text += "\n🦅 <b>Falcon Proxy:</b> <code>" + fp + "</code>"
+            except: pass
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
@@ -1130,6 +1343,7 @@ def callback_query(call):
             types.InlineKeyboardButton("📡 UDP ZIVPN", callback_data="menu_zivpn"),
             types.InlineKeyboardButton(ICON_PHONE + " BadVPN (Llamadas)", callback_data="badvpn_menu"),
             types.InlineKeyboardButton(ICON_BEAR + " Dropbear (SSH Mini)", callback_data="dropbear_menu"),
+            types.InlineKeyboardButton("🦅 Falcon Proxy (WS)", callback_data="falcon_menu"),
             types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
         )
         bot.edit_message_text(ICON_GEAR + " <b>GESTIÓN DE PROTOCOLOS</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
@@ -1346,6 +1560,60 @@ def callback_query(call):
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
         bot.edit_message_text(text + "\nID a borrar:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         bot.register_next_step_handler(call.message, process_admin_del)
+
+    elif call.data == "backup_data" and chat_id == SUPER_ADMIN:
+        bot.answer_callback_query(call.id, "📦 Creando Backup...")
+        try:
+            backup_path = os.path.join(PROJECT_DIR, 'backup_bot.zip')
+            param_env = os.path.join(PROJECT_DIR, '.env')
+            with zipfile.ZipFile(backup_path, 'w') as zipf:
+                if os.path.exists(DATA_FILE): zipf.write(DATA_FILE, arcname='bot_data.json')
+                if os.path.exists(param_env): zipf.write(param_env, arcname='.env')
+            
+            with open(backup_path, 'rb') as f:
+                bot.send_document(chat_id, f, caption=f"📦 <b>BACKUP SYSTEM</b>\n\nFecha: {datetime.now().strftime('%Y-%m-%d %H:%M')}", parse_mode='HTML')
+            os.remove(backup_path)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+# --- FALCON PROXY HANDLERS ---
+    elif call.data == "falcon_menu":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Instalar Falcon Proxy", callback_data="ask_falcon"),
+                   types.InlineKeyboardButton("Desinstalar", callback_data="del_falcon"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
+        bot.edit_message_text("🦅 <b>Falcon Proxy (Websockets/Socks)</b>\nGestor de Conexiones Premium.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "ask_falcon":
+        markup = types.InlineKeyboardMarkup(); markup.add(types.InlineKeyboardButton("Cancelar", callback_data="falcon_menu"))
+        bot.edit_message_text("Introduce el <b>Puerto</b> para Falcon Proxy:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, run_falcon_install)
+
+    elif call.data == "del_falcon":
+        bot.answer_callback_query(call.id, "🗑️ Eliminando...")
+        subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_falcon_proxy'])
+        bot.send_message(chat_id, "✅ Falcon Proxy eliminado.")
+        main_menu(chat_id, msg_id)
+
+    elif call.data == "force_cleanup" and chat_id == SUPER_ADMIN:
+        bot.answer_callback_query(call.id, "🧹 Analizando usuarios...")
+        count = cleanup_expired(force_report=True, chat_report=chat_id)
+        if count == 0: bot.send_message(chat_id, "✅ <b>Limpieza Completada:</b> No se encontraron usuarios vencidos.", parse_mode='HTML')
+    
+    # --- SSH INFO MANUAL/AUTO CALLBACKS ---
+    elif call.data == "ssh_pass_auto":
+        data = TEMP_SSH_CREATION.get(chat_id)
+        if data:
+            pwd = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+            perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
+        else: main_menu(chat_id, msg_id)
+
+    elif call.data == "ssh_pass_manual":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+        bot.edit_message_text(f"✍️ <b>Escribe la contraseña para el usuario:</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, process_ssh_manual_pass)
+
     elif call.data == "back_main":
         bot.clear_step_handler_by_chat_id(chat_id=chat_id)
         main_menu(chat_id, msg_id)
@@ -1364,9 +1632,11 @@ def show_pro_settings(chat_id, message_id):
         types.InlineKeyboardButton(domain_status, callback_data="set_domain"),
         types.InlineKeyboardButton(cf_status, callback_data="set_cloudfront"),
         types.InlineKeyboardButton(ICON_MEGA + " Banner SSH (Nuevo)", callback_data="menu_banner"),
+        types.InlineKeyboardButton("🛡️ Backup Data", callback_data="backup_data"),
+        types.InlineKeyboardButton("🧹 Limpieza Vencidos", callback_data="force_cleanup"),
         types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
     )
-    bot.edit_message_text(ICON_GEAR + " <b>AJUSTES AVANZADOS</b>", chat_id, message_id, reply_markup=markup, parse_mode='HTML')
+    bot.edit_message_text(ICON_GEAR + " <b>AJUSTES AVANZADOS</b>\nBot v6.7 - Auto-Limpieza Activa", chat_id, message_id, reply_markup=markup, parse_mode='HTML')
 
 def process_save_info(message):
     delete_user_msg(message)
@@ -1433,16 +1703,58 @@ def process_admin_del(message):
 def process_username(message):
     delete_user_msg(message)
     user = message.text.strip()
-    if message.chat.id == SUPER_ADMIN:
+    chat_id = message.chat.id
+    
+    # 1. Verificar Nombre Valido
+    if not user.isalnum():
+        bot.send_message(chat_id, "❌ <b>Nombre inválido:</b> Solo letras y números.", parse_mode='HTML')
+        main_menu(chat_id, USER_STEPS.get(chat_id))
+        return
+
+    # 2. Gestion de Dias (Solo Super Admin)
+    if chat_id == SUPER_ADMIN:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
-        bot.edit_message_text(ICON_TIME + " <b>Dias?</b>", message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML', reply_markup=markup)
-        bot.register_next_step_handler(message, lambda m: finalize_ssh(m, user))
-    else: finalize_ssh(message, user, 3 if not is_admin(message.chat.id) else 7)
+        bot.edit_message_text(ICON_TIME + " <b>¿Días de vigencia?</b>", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(message, lambda m: process_ssh_days(m, user))
+    else: 
+        # Admins Secundarios y Publico
+        days = 3 if not is_admin(chat_id) else 7
+        ask_ssh_pass_mode(chat_id, user, days)
 
-# Primera definicion de finalize_ssh removida por duplicidad (Usando la version de la linea 1500)
+def process_ssh_days(message, user):
+    delete_user_msg(message)
+    try:
+        days = int(message.text.strip())
+        ask_ssh_pass_mode(message.chat.id, user, days)
+    except:
+        bot.send_message(message.chat.id, "❌ Error: Numero invalido.")
+        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
+def ask_ssh_pass_mode(chat_id, user, days):
+    TEMP_SSH_CREATION[chat_id] = {'user': user, 'days': days}
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🎲 Automática", callback_data="ssh_pass_auto"),
+               types.InlineKeyboardButton("✍️ Manual", callback_data="ssh_pass_manual"))
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+    
+    msg_id = USER_STEPS.get(chat_id)
+    text = f"👤 <b>Usuario:</b> <code>{user}</code>\n📅 <b>Días:</b> {days}\n\n🔑 <b>¿Cómo defines la contraseña?</b>"
+    
+    try: bot.edit_message_text(text, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    except: bot.send_message(chat_id, text, parse_mode='HTML', reply_markup=markup)
 
+def process_ssh_manual_pass(message):
+    delete_user_msg(message)
+    pwd = message.text.strip()
+    chat_id = message.chat.id
+    data = TEMP_SSH_CREATION.get(chat_id)
+    if data:
+        perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
+    else:
+        main_menu(chat_id, USER_STEPS.get(chat_id))
+
+# --- SLOWDNS ---
 def process_slowdns_ns(message):
     delete_user_msg(message)
     ns = message.text.strip()
@@ -1759,31 +2071,63 @@ def finalize_zivpn(message, pwd, days=None):
         bot.send_message(message.chat.id, f"❌ <b>Error Critico:</b> {str(e)}")
         main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
-def finalize_ssh(message, user, days=None):
+def perform_edit_pass(chat_id, user, new_pass):
+    try:
+        msg_id = USER_STEPS.get(chat_id)
+        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'modificar_password', user, new_pass]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if "PASS_UPDATED" in res.stdout:
+            bot.edit_message_text(f"✅ <b>Contraseña Actualizada</b>\n\nUsuario: <code>{user}</code>\nPass: <code>{new_pass}</code>", chat_id, msg_id, parse_mode='HTML')
+        else:
+            bot.edit_message_text("❌ Error al cambiar password.", chat_id, msg_id)
+            
+        time.sleep(3)
+        main_menu(chat_id, msg_id)
+    except: main_menu(chat_id, msg_id)
+
+def process_edit_pass_manual(message, user):
+    delete_user_msg(message)
+    pwd = message.text.strip()
+    perform_edit_pass(message.chat.id, user, pwd)
+
+def process_edit_renew(message, user):
     delete_user_msg(message)
     try:
-        if days is None:
-            try: days = int(message.text)
-            except ValueError: 
-                bot.send_message(message.chat.id, "❌ <b>Error:</b> Los días deben ser un número.", parse_mode='HTML')
-                main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
-                return
+        days = int(message.text.strip())
+        chat_id = message.chat.id
+        msg_id = USER_STEPS.get(chat_id)
+        
+        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'renovar_user', user, str(days)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if "USER_RENEWED" in res.stdout:
+            exp_date = res.stdout.split('|')[1].strip()
+            bot.edit_message_text(f"✅ <b>Usuario Renovado</b>\n\nUsuario: <code>{user}</code>\nNueva Vencimiento: {exp_date}", chat_id, msg_id, parse_mode='HTML')
+        else:
+            bot.edit_message_text("❌ Error al renovar usuario.", chat_id, msg_id)
+            
+        time.sleep(3)
+        main_menu(chat_id, msg_id)
+    except: 
+        bot.send_message(message.chat.id, "❌ Error: Numero invalido.")
+        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+
+def perform_ssh_creation(chat_id, user, pwd, days):
+    try:
+        msg_id = USER_STEPS.get(chat_id)
         
         # Feedback visual de proceso
-        status_msg = bot.send_message(message.chat.id, "⏳ <b>Creando Usuario SSH...</b>", parse_mode='HTML')
+        try: bot.edit_message_text(f"⏳ <b>Creando Usuario SSH...</b>\n\nUser: {user}\nPass: {pwd}", chat_id, msg_id, parse_mode='HTML')
+        except: pass
         
         # Limpieza de expirados antes de crear
         cleanup_expired()
     
-        pwd = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, str(days)]
         
         # Ejecutar y capturar TODO (stdout + stderr)
         res = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Borrar mensaje de estado
-        try: bot.delete_message(message.chat.id, status_msg.message_id)
-        except: pass
         
         if "SUCCESS" in res.stdout:
             ip = get_public_ip()
@@ -1795,7 +2139,7 @@ def finalize_ssh(message, user, days=None):
             try: dt = res.stdout.strip().split('|')[2]
             except: dt = "Indefinida"
             
-            msg = ICON_CHECK + " <b>BOT TELEGRAM DEPWISE V6.6</b>\n--------------------------------------\n"
+            msg = ICON_CHECK + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n--------------------------------------\n"
             msg += ICON_PIN + " <b>HOST IP:</b> <code>" + ip + "</code> \n"
             if domain:
                 msg += "🌐 <b>DOMINIO:</b> <code>" + domain + "</code> \n"
@@ -1819,27 +2163,36 @@ def finalize_ssh(message, user, days=None):
                     msg += "\n🌐 <b>WEBSOCK:</b> " + ", ".join([f"<code>{p}</code>" for p in ports.keys()]) + "\n"
             
             # Info Nuevos Protocolos
-            if data.get('dropbear'): msg += ICON_BEAR + " <b>Dropbear:</b> <code>" + str(data.get('dropbear')) + "</code>\n"
             if data.get('badvpn'): msg += ICON_PHONE + " <b>BadVPN:</b> <code>7300</code> (Soporte Juegos/Llamadas)\n"
+            if data.get('dropbear'): msg += ICON_BEAR + " <b>Dropbear:</b> <code>" + str(data.get('dropbear')) + "</code>\n"
+            # Falcon Proxy Info
+            if os.path.exists("/etc/falconproxy.conf"):
+                try: 
+                    with open("/etc/falconproxy.conf") as f: 
+                        fc = f.read(); 
+                        if "PORTS" in fc: 
+                            fp = fc.split('PORTS="')[1].split('"')[0]
+                            msg += "🦅 <b>Falcon Proxy:</b> <code>" + fp + "</code>\n"
+                except: pass
     
             msg += "<b>VENCE:</b> " + dt + " (" + str(days) + " dias)\n--------------------------------------\n"
             msg += ICON_MIC + " @Depwise2 | " + ICON_DEV + " @Dan3651"
             
             # Registrar dueño
             data = load_data()
-            data['ssh_owners'][user] = str(message.chat.id)
+            data['ssh_owners'][user] = str(chat_id)
             save_data(data)
     
-            if USER_STEPS.get(message.chat.id):
+            if USER_STEPS.get(chat_id):
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver al Menú", callback_data="back_main"))
-                try: bot.edit_message_text(msg, message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML', reply_markup=markup)
-                except: bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_markup=markup)
+                try: bot.edit_message_text(msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+                except: bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
             else:
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver al Menú", callback_data="back_main"))
-                msg_obj = bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_markup=markup)
-                USER_STEPS[message.chat.id] = msg_obj.message_id
+                msg_obj = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                USER_STEPS[chat_id] = msg_obj.message_id
         else:
             # Manejo de Error Detallado
             error_detail = res.stdout.strip() + "\n" + res.stderr.strip()
@@ -1852,34 +2205,93 @@ def finalize_ssh(message, user, days=None):
                 error_msg = ICON_X + " <b>FALLO AL CREAR:</b>\n<pre>" + safe_detail + "</pre>"
                 
             try:
-                bot.edit_message_text(error_msg, message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML')
+                bot.edit_message_text(error_msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML')
             except:
-                bot.send_message(message.chat.id, error_msg, parse_mode='HTML')
+                bot.send_message(chat_id, error_msg, parse_mode='HTML')
             time.sleep(4)
-            main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+            main_menu(chat_id, USER_STEPS.get(chat_id))
             
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
-        bot.send_message(message.chat.id, f"❌ <b>Error Interno del Bot:</b>\n<pre>{html_lib.escape(str(e))}</pre>", parse_mode='HTML')
+        bot.send_message(chat_id, f"❌ <b>Error Interno del Bot:</b>\n<pre>{html_lib.escape(str(e))}</pre>", parse_mode='HTML')
         print(trace) # Imprimir al log del sistema para debug
         time.sleep(3)
-        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+        main_menu(chat_id, USER_STEPS.get(chat_id))
 
-def cleanup_expired():
+def cleanup_expired(force_report=False, chat_report=None):
     data = load_data()
-    now = datetime.now().strftime("%Y-%m-%d")
-    to_del = []
+    now_date = datetime.now()
+    now_str = now_date.strftime("%Y-%m-%d")
+    deleted_count = 0
+    report_msg = "🧹 <b>REPORTE DE LIMPIEZA:</b>\n\n"
     
-    # Zivpn cleanup
+    # --- 1. ZIVPN CLEANUP ---
+    to_del_zivpn = []
     for pwd, exp in data.get('zivpn_users', {}).items():
-        if exp < now:
+        if exp < now_str:
             subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'del', pwd])
-            to_del.append(pwd)
+            to_del_zivpn.append(pwd)
+            report_msg += f"• ZIVPN: <code>{pwd}</code> (Venció: {exp})\n"
+            deleted_count += 1
     
-    if to_del:
-        for p in to_del: del data['zivpn_users'][p]
+    if to_del_zivpn:
+        for p in to_del_zivpn: del data['zivpn_users'][p]
         save_data(data)
+
+    # --- 2. SSH USERS CLEANUP ---
+    owners = data.get('ssh_owners', {})
+    if owners:
+        # Check system users
+        try:
+            # Iterar copia de keys para evitar error runtime size change
+            for user in list(owners.keys()):
+                # Obtener expiracion real del sistema
+                cmd = f"chage -l {user} | grep 'Account expires'"
+                # Output format: "Account expires : Feb 05, 2026" or "Account expires : never"
+                try: 
+                    res = subprocess.check_output(cmd, shell=True).decode().strip()
+                    date_part = res.split(':')[1].strip()
+                    
+                    if date_part.lower() == 'never': continue
+                    
+                    # Parsear fecha (Feb 05, 2026)
+                    exp_dt = datetime.strptime(date_part, '%b %d, %Y')
+                    
+                    # Si fecha expiracion < hoy (ignorando hora, solo fecha)
+                    if exp_dt.date() < now_date.date():
+                        # Expirado!
+                        subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_user', user])
+                        del data['ssh_owners'][user] # Borrar de BD
+                        save_data(data) # Guardar iterativo por seguridad
+                        report_msg += f"• SSH: <code>{user}</code> (Venció: {exp_dt.strftime('%Y-%m-%d')})\n"
+                        deleted_count += 1
+                        
+                except Exception as ex: 
+                    # Usuario no existe en sistema o error parseo
+                    pass
+        except Exception as e:
+            print(f"Error en SSH Cleanup: {e}")
+
+    # Reportar si hubo borrados y se pidió reporte manual
+    if deleted_count > 0 and force_report and chat_report:
+        try: bot.send_message(chat_report, report_msg, parse_mode='HTML')
+        except: pass
+        
+    return deleted_count
+
+# Hilo persistente de auto-limpieza
+def auto_cleanup_loop():
+    while True:
+        try:
+            # Ejecutar limpieza cada 6 horas (21600 sec)
+            cleanup_expired()
+            time.sleep(21600) 
+        except:
+            time.sleep(600) # Si falla, reintentar en 10 min
+
+# Iniciar hilo al final del script principal
+
 
 def process_broadcast(message):
     delete_user_msg(message)
@@ -1971,7 +2383,32 @@ def run_dropbear(message):
     except: pass
     main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
+
+def run_falcon_install(message):
+    delete_user_msg(message)
+    port = message.text.strip()
+    msg = bot.send_message(message.chat.id, "⏳ <b>Instalando Falcon Proxy...</b>\nDescargando ultima version...", parse_mode='HTML')
+    
+    res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'instalar_falcon_proxy', port], capture_output=True, text=True)
+    
+    if "FALCON_SUCCESS" in res.stdout:
+        parts = res.stdout.split('|')
+        ver = parts[1]
+        p_out = parts[2]
+        bot.edit_message_text(f"✅ <b>Falcon Proxy Instalado</b>\n\nVersión: <code>{ver}</code>\nPuerto: <code>{p_out}</code>", message.chat.id, msg.message_id, parse_mode='HTML')
+    else:
+        err = res.stdout.strip() or "Error desconocido"
+        bot.edit_message_text(f"❌ <b>Error al instalar:</b>\n{err}", message.chat.id, msg.message_id)
+    
+    time.sleep(2)
+    try: bot.delete_message(message.chat.id, msg.message_id)
+    except: pass
+    main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+
 if __name__ == "__main__":
+    # Iniciar Auto-Limpieza en segundo plano
+    threading.Thread(target=auto_cleanup_loop, daemon=True).start()
+    
     while True:
         try: bot.infinity_polling(timeout=50)
         except Exception: time.sleep(10)
