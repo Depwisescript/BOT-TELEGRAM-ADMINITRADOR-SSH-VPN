@@ -1,70 +1,88 @@
 # 💎 Bot Telegram Depwise SSH - Versión 6.7 (PRO)
 
-Este es un bot de gestión SSH y VPN para Telegram de alto rendimiento. Diseñado para administradores que buscan una solución integral, **estética** y robusta.
+Una solución integral, estética y potente para la gestión de servidores SSH y VPN directamente desde Telegram. Diseñado para administradores que valoran el rendimiento y la facilidad de uso.
+
+![Banner](https://img.shields.io/badge/Versión-6.7_PRO-blue?style=for-the-badge&logo=telegram) ![Python](https://img.shields.io/badge/Python-3.8+-yellow?style=for-the-badge&logo=python) ![Bash](https://img.shields.io/badge/Bash-Script-green?style=for-the-badge&logo=gnu-bash)
 
 ---
 
-## 🚀 Novedades de la Versión 6.7
+## 🚀 Novedades y Características (v6.7)
 
-### ☁️ Integración Total con Dominios (Cloudflare + CloudFront)
-- **Dominio Cloudflare:** Configura tu dominio principal para SSH/Websock.
-- **Dominio CloudFront:** [NUEVO] Agrega tu dominio CloudFront para distribución de contenido o payload.
-- **Auto-Limpieza**: Los mensajes de confirmación se eliminan automáticamente a los 3 segundos para mantener tu chat impecable.
-- **Visibilidad**: Ambos dominios aparecen en "Info Servidor" y son **copiables** al crear usuarios.
+### 🦅 Nuevo: Falcon Proxy
+- **Gestor Websocket/Socks**: Soporte nativo para Falcon Proxy.
+- **Instalación Automática**: Descarga y configuración en un solo toque.
+- **Gestión Visual**: Visualiza versión instalada y puertos activos.
 
-### 🛰️ Gestión Avanzada de Protocolos
-- **ZIVPN (UDP) Mejorado**:
-  - **🔍 Verificación de Actividad**: Nueva función para revisar si una contraseña tiene uso reciente (lee logs del sistema).
-  - **Submenú Dedicado**: Gestión de instalación y eliminación separada.
-- **BadVPN / UDPGW 2.0**:
-  - **Instalador Robusto**: Compilación desde fuente con detección de errores, re-instalación forzada y limpieza de servicios previos.
-  - **Anti-Bloqueo**: Usa `cmake` y `make` con flags optimizados.
-- **Dropbear Secure**:
-  - Generación automática de llaves (`host keys`) y servicio custom para evitar conflictos.
+### 🎨 Personalización y Estética
+- **Banner SSH en Vivo**: Edita el banner de bienvenida de tu servidor SSH (texto o ASCII Art) directamente desde el bot.
+- **Interfaz Copiable**: IPs, Puertos, Usuarios y Contraseñas formateados en `monospaced` para copiar con un clic.
+- **Soporte Markdown**: Mensajes informativos con formato rico.
 
-### 📱 Experiencia de Usuario (UX)
-- **Menús Reorganizados**: "Gestión de Protocolos" ahora es un hub limpio que redirige a submenús específicos (SlowDNS, ZIVPN, ProxyDT).
-- **Todo Copiable**: IPs, Puertos, Usuarios, Passwords y Dominios usan formato `<code>` de Telegram para copiar con un toque.
+### ☁️ Integración Cloud (CDN)
+- **Cloudflare & CloudFront**:
+  - Configura y gestiona dominios CDN.
+  - Visualización persistente en el panel de información.
+  - Se adjuntan automáticamente a los detalles del usuario creado.
 
----
-
-## 🛡️ Características Core
-
-- **Navegación Fluida**: El bot edita un único mensaje para todas las funciones (evita el spam).
-- **ProxyDT-Go (Cracked)**:
-  - Soporte Multi-Arquitectura (AMD64/ARM64).
-  - Instalación automática con múltiples espejos (mirrors).
-  - Apertura/Cierre de puertos WebSocket en caliente.
-- **SlowDNS Manager**: Instalación automática de DNSTT con claves y servicio systemd.
-- **Monitor de Usuarios**:
-  - **Admin**: Ve sus propios usuarios.
-  - **Super Admin**: Ve todos los usuarios y dueños.
+### 🛰️ Soporte Multi-Protocolo
+| Protocolo | Estado | Características |
+|:---:|:---:|:---|
+| **SSH** | ✅ N/A | Gestión de usuarios, expiración automática y monitoreo. |
+| **Dropbear** | ✅ Auto | SSH ligero alternativo. Generación automática de keys. |
+| **G. ZIVPN** | ✅ UPD | Túnel UDP (Puerto 5667 -> 6000-19999). **Verificación de actividad en logs**. |
+| **BadVPN** | ✅ UDPGW | Soporte para videollamadas y juegos (Puerto 7300). Compilación robusta. |
+| **SlowDNS** | ✅ DNSTT | Instalación automática de binarios y claves servidor/cliente. |
+| **ProxyDT** | ✅ Go | Versión *No-Token* (Cracked). WebSocket multi-puerto en caliente. |
 
 ---
 
-## 🛠️ Instalación Rápida
+## 🛡️ Panel de Administración
 
-Ejecuta este comando en tu terminal (como root):
+### 👤 Gestión de Usuarios
+- **Crear/Eliminar/Renovar**: Control total de cuentas SSH y VPN.
+- **Passwords**: Generación aleatoria o manual.
+- **Auto-Limpieza**: El bot elimina automáticamente usuarios vencidos cada 6 horas.
+
+### 🔧 Herramientas del Sistema
+- **Monitor de Recursos**: Visualiza conexiones activas (SSH) y usuarios online.
+- **Backup Data**: Crea y descarga una copia de seguridad (`.zip`) de tu base de datos y configuración.
+- **Control de Acceso**:
+  - **Modo Público/Privado**: Cierra el bot para uso exclusivo de administradores.
+  - **Sistema de Revendedores**: Agrega sub-admins con límites de días (3 días público / 7 días admin).
+
+---
+
+## 🛠️ Instalación
+
+Ejecuta el siguiente comando en tu terminal como usuario **root**:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADMINITRADOR-SSH-VPN/refs/heads/main/instalador_depwise.sh)
 ```
 
-**Requisitos:**
-- Ubuntu 20.04+ / Debian 10+
-- Python 3 instalado (el script lo instala si falta).
+### Requisitos previos
+- **SO**: Ubuntu 20.04+ (Recomendado) o Debian 10+.
+- **Arquitectura**: AMD64 o ARM64.
+- **Puertos**: Asegúrate de no tener conflictos en puertos estándar (80, 443, 22).
+
+### Configuración Post-Instalación
+El script solicitará interactivamente:
+1.  **Token del Bot**: Crea uno en [@BotFather](https://t.me/BotFather).
+2.  **ID de Admin**: Tu ID numérico (obtenlo en [@userinfobot](https://t.me/userinfobot)).
 
 ---
 
-## ⚙️ Configuración Inicial
-Al instalar, el script te pedirá:
-1.  **Token del Bot**: Consíguelo en @BotFather.
-2.  **ID de Admin**: Tu ID numérico de Telegram (usa @userinfobot).
+## 📸 Capturas / Comandos
+
+- `/start` o `/menu`: Abre el panel principal.
+- **Botones Inline**: Toda la navegación es a través de botones interactivos.
 
 ---
 
 ## 💎 Créditos
-- **Desarrollo Core**: @Dan3651
-- **Comunidad**: @Depwise2
 
-*Este proyecto es para administración de redes privadas.*
+- **Desarrollador Principal**: [@Dan3651](https://t.me/Dan3651)
+- **Canal Oficial**: [@Depwise2](https://t.me/Depwise2)
+
+---
+*Este software se distribuye con fines educativos y de administración de redes.*
