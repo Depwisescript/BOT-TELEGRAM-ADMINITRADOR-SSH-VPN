@@ -994,6 +994,30 @@ EOF
 }
 ENDFUNC
 
+# --- MONITOR DE RECURSOS ---
+cat << 'ENDFUNC' >> ssh_manager.sh
+
+obtener_recursos() {
+    # CPU: Usamos vmstat para mayor compatibilidad o top fallback
+    local CPU=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    if [ -z "$CPU" ]; then CPU="0"; fi
+    
+    # RAM
+    local RAM_U=$(free -m | awk '/Mem:/ {print $3}')
+    local RAM_T=$(free -m | awk '/Mem:/ {print $2}')
+    
+    # DISK
+    local DISK_U=$(df -h / | awk 'NR==2 {print $3}')
+    local DISK_T=$(df -h / | awk 'NR==2 {print $2}')
+    local DISK_P=$(df -h / | awk 'NR==2 {print $5}' | tr -d '%')
+    
+    # UPTIME
+    local UPT=$(uptime -p | sed 's/up //')
+    
+    echo "$CPU|$RAM_U|$RAM_T|$DISK_U|$DISK_T|$DISK_P|$UPT"
+}
+ENDFUNC
+
 # --- CASE PRINCIPAL ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 case "$1" in
@@ -1024,6 +1048,7 @@ case "$1" in
     eliminar_falcon_proxy) eliminar_falcon_proxy ;;
     instalar_ssl_tunnel) instalar_ssl_tunnel "$2" ;;
     eliminar_ssl_tunnel) eliminar_ssl_tunnel ;;
+    obtener_recursos) obtener_recursos ;;
 esac
 ENDFUNC
 chmod +x ssh_manager.sh
@@ -1161,6 +1186,18 @@ def delete_user_msg(message):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
 
+def render_progress_bar(percent, length=10):
+    percent = float(percent)
+    fill = int(length * percent / 100)
+    
+    # Emojis futuristas segun nivel
+    if percent < 50: status = "🟢"
+    elif percent < 80: status = "🟡"
+    else: status = "🔴"
+    
+    bar = "■" * fill + "□" * (length - fill)
+    return f"[{bar}] {status}"
+
 def main_menu(chat_id, message_id=None):
     data = load_data()
     is_sa = (chat_id == SUPER_ADMIN)
@@ -1187,13 +1224,6 @@ def main_menu(chat_id, message_id=None):
             types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar")
         )
     else:
-         # Publico solo puede eliminar sus propios (si se desea) o nada.
-         # El usuario pidio restringir "Editar". Por consistencia, si no ven editar, quizas "Eliminar" tambien deberia ser restringido o separado.
-         # Pero el requerimiento fue especifico sobre "Editar". Mantenemos Eliminar?
-         # "que solo el super admin y los admin tengan acceso , el publico en general no" -> refiriendose al boton de editar.
-         # Dejaremos Eliminar visible para publico (para que borren sus cuentas si quieren) o lo muevo?
-         # La estructura original tenia todo junto. Voy a separar Editar para cumplir el request.
-         # El codigo original tenia Eliminar disponible.
          markup.add(types.InlineKeyboardButton(ICON_DEL + " Eliminar SSH", callback_data="menu_eliminar"))
     if is_sa:
         markup.add(
@@ -1209,7 +1239,32 @@ def main_menu(chat_id, message_id=None):
             types.InlineKeyboardButton(ICON_GEAR + " Monitor Online", callback_data="menu_online")
         )
     
-    text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n"
+    # --- MONITOR DE RECURSOS (FUTURISTA) ---
+    res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'obtener_recursos'], capture_output=True, text=True)
+    try:
+        # CPU|RAM_U|RAM_T|DISK_U|DISK_T|DISK_P|UPT
+        metrics = res.stdout.strip().split('|')
+        cpu_p = metrics[0]
+        ram_u, ram_t = metrics[1], metrics[2]
+        disk_u, disk_t, disk_p = metrics[3], metrics[4], metrics[5]
+        upt = metrics[6]
+        
+        # Calcular porcentaje RAM
+        ram_p = int(int(ram_u) * 100 / int(ram_t)) if int(ram_t) > 0 else 0
+        
+        text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n"
+        text += "<i>Panel de Control Avanzado</i>\n\n"
+        
+        text += f"🧠 <b>CPU:</b> {render_progress_bar(cpu_p)} <code>{cpu_p}%</code>\n"
+        text += f"💾 <b>RAM:</b> {render_progress_bar(ram_p)} <code>{ram_u}MB / {ram_t}MB</code>\n"
+        text += f"💽 <b>DSK:</b> {render_progress_bar(disk_p)} <code>{disk_u} / {disk_t}</code>\n"
+        text += f"⏱️ <b>UPT:</b> <code>{upt}</code>\n"
+        text += "----------------------------------------\n"
+        
+    except:
+        text = ICON_GEM + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n"
+        text += "<i>Cargando recursos...</i>\n\n"
+
     if not data.get('public_access', True): text += ICON_LOCK + " <i>Acceso Público: Desactivado</i>\n"
     
     if message_id:
