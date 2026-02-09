@@ -65,9 +65,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADM
 ## 📸 Previas del Bot
 
 <div align="center">
-  <img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80" alt="Cyberpunk Server Room Preview" width="600">
+  <img src="./bot_v6.7.jpg" alt="Depwise Bot V6.7 Interface" width="600">
   <br>
-  <i>Interfaz visual de alto rendimiento (Imagen referencial)</i>
+  <i>Interfaz del Bot V6.7 (Captura Real)</i>
 </div>
 
 ---
