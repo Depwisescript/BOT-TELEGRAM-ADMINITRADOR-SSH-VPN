@@ -65,9 +65,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/Depwisescript/BOT-TELEGRAM-ADM
 ## 📸 Previas del Bot
 
 <div align="center">
-  <img src="https://via.placeholder.com/600x400.png?text=Preview+Menu+Principal" alt="Menu Principal">
+  <img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80" alt="Cyberpunk Server Room Preview" width="600">
   <br>
-  <i>Interfaz intuitiva con botones interactivos</i>
+  <i>Interfaz visual de alto rendimiento (Imagen referencial)</i>
 </div>
 
 ---
