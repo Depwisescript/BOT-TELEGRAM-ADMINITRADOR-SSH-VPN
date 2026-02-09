@@ -331,26 +331,24 @@ instalar_proxydt() {
     local BIN_NAME="proxydt"
     echo "Arquitectura detectada: $ARCH" >> /tmp/proxydt_install.log
     
-    # Lista de Miras (Mirrors)
+    # Lista de Miras (Mirrors) - ACTUALIZADO CON ENLACES PROVISTOS POR USUARIO (COMMIT: 928bb1af...)
     declare -a MIRRORS=(
-        "https://raw.githubusercontent.com/mauvadao4g/ProxyDtunel/main/proxy"
-        "https://raw.githubusercontent.com/mauvadao4g/ProxyDtunel/main/DT%201.2.3/proxy"
-        "https://github.com/zahidbd2/udp-zivpn/releases/download/latest/udp-zivpn-linux-amd64"
-        "https://github.com/Penguinehis/ProxyCracked/raw/main/proxy"
+        "https://raw.githubusercontent.com/Depwisescript/PROXY-DT/928bb1af4211b874361bc65c210189a5922ccaa8/DT%201.2.3/x86/proxy"
+        "https://raw.githubusercontent.com/Depwisescript/PROXY-DT/928bb1af4211b874361bc65c210189a5922ccaa8/DT%201.2.3/proxydt"
     )
-    
-    # Si es ARM, preferir binarios específicos si están disponibles
+
+    # Si es ARM, usar el binario arm64 específico del commit provisto
     if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm"* ]]; then
-        MIRRORS=("https://github.com/zahidbd2/udp-zivpn/releases/download/latest/udp-zivpn-linux-arm64" "${MIRRORS[@]}")
+        MIRRORS=("https://raw.githubusercontent.com/Depwisescript/PROXY-DT/928bb1af4211b874361bc65c210189a5922ccaa8/DT%201.2.3/arm64/proxy" "${MIRRORS[@]}")
     fi
 
-    # Check existing binary
-    if [ -f "/usr/bin/proxydt" ] && [ -x "/usr/bin/proxydt" ]; then
-        echo "Binario detectado. Saltando descarga..." >> /tmp/proxydt_install.log
-        echo "PROXYDT_SUCCESS|Existente"
-        rm -f /tmp/proxydt_install.log /tmp/libssl1.1.deb
-        return 0
-    fi
+    # Check existing binary (DESACTIVADO PARA FORZAR ACTUALIZACIÓN)
+    # if [ -f "/usr/bin/proxydt" ] && [ -x "/usr/bin/proxydt" ]; then
+    #     echo "Binario detectado. Saltando descarga..." >> /tmp/proxydt_install.log
+    #     echo "PROXYDT_SUCCESS|Existente"
+    #     rm -f /tmp/proxydt_install.log /tmp/libssl1.1.deb
+    #     return 0
+    # fi
 
     echo "Eliminando versiones previas..." >> /tmp/proxydt_install.log
     rm -f /usr/bin/proxydt /usr/bin/proxy
@@ -383,9 +381,8 @@ abrir_puerto_proxydt() {
     local SERVICE_NAME="proxydt-$PORT"
     local SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 
-    # Verificar si el puerto ya está en uso
-    # Usamos -n -P para evitar resolucion DNS que congela el bot
-    if lsof -n -P -i :$PORT -sTCP:LISTEN -t >/dev/null; then
+    # Verificar si el puerto ya está en uso (lsof + ss para redundancia)
+    if lsof -n -P -i :$PORT -sTCP:LISTEN -t >/dev/null || ss -lptn "sport = :$PORT" | grep -q ":$PORT"; then
         echo "ERROR: El puerto $PORT ya está ocupado."
         return 1
     fi
@@ -395,8 +392,10 @@ abrir_puerto_proxydt() {
     echo "After=network.target" >> "$SERVICE_FILE"
     echo "[Service]" >> "$SERVICE_FILE"
     echo "Type=simple" >> "$SERVICE_FILE"
-    # Actualizado para binario mauvadao4g/ProxyDtunel
-    echo "ExecStart=/usr/bin/proxydt -proxy_port 0.0.0.0:$PORT -msg SSHTFREE" >> "$SERVICE_FILE"
+    # Kill cualquier proceso en el puerto antes de iniciar para evitar conflictos fantasma
+    echo "ExecStartPre=/bin/sh -c 'fuser -k -n tcp $PORT || true'" >> "$SERVICE_FILE"
+    # Intentar bind a todas las interfaces usando :$PORT (Go standard)
+    echo "ExecStart=/usr/bin/proxydt --port $PORT --response SSHTFREE" >> "$SERVICE_FILE"
     echo "Restart=always" >> "$SERVICE_FILE"
     echo "RestartSec=3" >> "$SERVICE_FILE"
     echo "[Install]" >> "$SERVICE_FILE"
@@ -898,6 +897,103 @@ eliminar_falcon_proxy() {
 }
 ENDFUNC
 
+# --- SSL TUNNEL (HAPROXY) ---
+cat << 'ENDFUNC' >> ssh_manager.sh
+
+check_and_free_ports() {
+    local PORT=$1
+    if lsof -n -P -i :$PORT -sTCP:LISTEN -t >/dev/null; then
+        fuser -k -n tcp $PORT || true
+        sleep 1
+    fi
+}
+
+check_and_open_firewall_port() {
+    local PORT=$1
+    if ! iptables -C INPUT -p tcp --dport $PORT -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
+        netfilter-persistent save 2>/dev/null || true
+    fi
+}
+
+instalar_ssl_tunnel() {
+    local PORT=$1
+    local SSL_CERT_FILE="/etc/haproxy/haproxy.pem"
+    local HAPROXY_CONFIG="/etc/haproxy/haproxy.cfg"
+
+    if ! command -v haproxy &> /dev/null; then
+        apt-get update && apt-get install -y haproxy || { echo "ERROR: Falló al instalar HAProxy."; return 1; }
+    fi
+
+    if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        echo "ERROR: Puerto inválido."
+        return 1
+    fi
+    
+    check_and_free_ports "$PORT"
+    check_and_open_firewall_port "$PORT"
+
+    # Certificado Generico
+    if [ ! -f "$SSL_CERT_FILE" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout "$SSL_CERT_FILE" -out "$SSL_CERT_FILE" \
+            -subj "/CN=ssl-tunnel" \
+            >/dev/null 2>&1
+    fi
+
+    # Config
+    cat > "$HAPROXY_CONFIG" <<-EOF
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+frontend ssh_ssl_in
+    bind *:$PORT ssl crt $SSL_CERT_FILE
+    mode tcp
+    default_backend ssh_backend
+backend ssh_backend
+    mode tcp
+    server ssh_server 127.0.0.1:22
+EOF
+
+    systemctl daemon-reload
+    systemctl restart haproxy
+    sleep 2
+    if systemctl is-active --quiet haproxy; then
+        echo "SSL_TUNNEL_SUCCESS|$PORT"
+    else
+        echo "ERROR: HAProxy no arrancó. Ver 'systemctl status haproxy'."
+    fi
+}
+
+eliminar_ssl_tunnel() {
+    systemctl stop haproxy >/dev/null 2>&1
+    # Restaurar config default limpia
+    cat > "/etc/haproxy/haproxy.cfg" <<-EOF
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+defaults
+    log     global
+EOF
+    rm -f "/etc/haproxy/haproxy.pem"
+    echo "SSL_TUNNEL_REMOVED"
+}
+ENDFUNC
+
 # --- CASE PRINCIPAL ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 case "$1" in
@@ -926,6 +1022,8 @@ case "$1" in
     eliminar_dropbear) eliminar_dropbear ;;
     instalar_falcon_proxy) instalar_falcon_proxy "$2" ;;
     eliminar_falcon_proxy) eliminar_falcon_proxy ;;
+    instalar_ssl_tunnel) instalar_ssl_tunnel "$2" ;;
+    eliminar_ssl_tunnel) eliminar_ssl_tunnel ;;
 esac
 ENDFUNC
 chmod +x ssh_manager.sh
@@ -1300,6 +1398,9 @@ def callback_query(call):
                         text += "\n🦅 <b>Falcon Proxy:</b> <code>" + fp + "</code>"
             except: pass
 
+        # SSL Tunnel Info
+        if data.get('ssl_tunnel'): text += "\n🚀 <b>SSL Tunnel:</b> <code>" + str(data.get('ssl_tunnel')) + "</code>"
+
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
         bot.edit_message_text(text, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
@@ -1360,9 +1461,39 @@ def callback_query(call):
             types.InlineKeyboardButton(ICON_PHONE + " BadVPN (Llamadas)", callback_data="badvpn_menu"),
             types.InlineKeyboardButton(ICON_BEAR + " Dropbear (SSH Mini)", callback_data="dropbear_menu"),
             types.InlineKeyboardButton("🦅 Falcon Proxy (WS)", callback_data="falcon_menu"),
+            types.InlineKeyboardButton("🚀 SSL Tunnel (HAProxy)", callback_data="ssl_tunnel_menu"),
             types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
         )
         bot.edit_message_text(ICON_GEAR + " <b>GESTIÓN DE PROTOCOLOS</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "ssl_tunnel_menu":
+        d = load_data()
+        port = d.get('ssl_tunnel')
+        st = f"INSTALADO ({port})" if port else "NO INSTALADO"
+        
+        markup = types.InlineKeyboardMarkup()
+        if not port:
+            markup.add(types.InlineKeyboardButton("Instalar SSL Tunnel", callback_data="ask_ssl_tunnel"))
+        else:
+            markup.add(types.InlineKeyboardButton("Desinstalar SSL Tunnel", callback_data="del_ssl_tunnel"))
+            
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
+        bot.edit_message_text(f"🚀 <b>SSL Tunnel (HAProxy)</b>\nEstado: {st}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "ask_ssl_tunnel":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Cancelar", callback_data="ssl_tunnel_menu"))
+        bot.edit_message_text("Introduce el <b>Puerto</b> para SSL Tunnel (ej: 444):", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, run_ssl_install)
+
+    elif call.data == "del_ssl_tunnel":
+        bot.answer_callback_query(call.id, "🗑️ Eliminando...")
+        subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_ssl_tunnel'])
+        d = load_data(); 
+        if 'ssl_tunnel' in d: del d['ssl_tunnel']
+        save_data(d)
+        bot.send_message(chat_id, "✅ SSL Tunnel eliminado.")
+        main_menu(chat_id, msg_id)
     elif call.data == "menu_slowdns" and chat_id == SUPER_ADMIN:
         d = load_data()
         is_inst = d.get('slowdns', {}).get('key')
@@ -1770,6 +1901,44 @@ def process_ssh_manual_pass(message):
     else:
         main_menu(chat_id, USER_STEPS.get(chat_id))
 
+def run_ssl_install(message):
+    delete_user_msg(message)
+    port = message.text.strip()
+    chat_id = message.chat.id
+    msg_id = USER_STEPS.get(chat_id)
+    
+    # Mensaje de espera
+    wait_msg = bot.send_message(chat_id, "⏳ <b>Instalando SSL Tunnel...</b>\nPor favor espera.", parse_mode='HTML')
+    
+    # Ejecutar script
+    res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'instalar_ssl_tunnel', port], capture_output=True, text=True)
+    
+    # Borrar mensaje de espera
+    try: bot.delete_message(chat_id, wait_msg.message_id)
+    except: pass
+    
+    if "SSL_TUNNEL_SUCCESS" in res.stdout:
+        # Guardar datos
+        d = load_data()
+        d['ssl_tunnel'] = port
+        save_data(d)
+        
+        # Exito (Borrar a los 2s)
+        final_msg = bot.send_message(chat_id, f"✅ <b>SSL Tunnel Instalado</b>\nPuerto: <code>{port}</code>", parse_mode='HTML')
+        time.sleep(2)
+        try: bot.delete_message(chat_id, final_msg.message_id)
+        except: pass
+        main_menu(chat_id, msg_id)
+    else:
+        # Error (Borrar a los 3s)
+        err = res.stdout.strip() or "Error desconocido."
+        safe_err = html_lib.escape(err)
+        err_msg = bot.send_message(chat_id, f"❌ <b>Error:</b>\n<pre>{safe_err}</pre>", parse_mode='HTML')
+        time.sleep(3)
+        try: bot.delete_message(chat_id, err_msg.message_id)
+        except: pass
+        main_menu(chat_id, msg_id)
+
 # --- SLOWDNS ---
 def process_slowdns_ns(message):
     delete_user_msg(message)
@@ -1887,7 +2056,13 @@ def run_proxydt_install(chat_id, msg_id):
         ver = res.stdout.split('|')[1]
         bot.edit_message_text(f"✅ <b>ProxyDT-Go Instalado</b>\nVersión: <code>{ver}</code>", chat_id, msg_id, parse_mode='HTML')
     else:
-        bot.edit_message_text("❌ <b>Error al instalar ProxyDT-Go.</b>", chat_id, msg_id, parse_mode='HTML')
+
+        log_content = "Sin detalles."
+        if os.path.exists("/tmp/proxydt_install.log"):
+            try: log_content = subprocess.check_output(['tail', '-n', '5', '/tmp/proxydt_install.log']).decode('utf-8', errors='ignore')
+            except: pass
+        safe_log = html_lib.escape(log_content)
+        bot.edit_message_text(f"❌ <b>Error al instalar ProxyDT-Go.</b>\n<pre>{safe_log}</pre>", chat_id, msg_id, parse_mode='HTML')
     time.sleep(3)
     show_proxydt_menu(chat_id, msg_id)
 
@@ -2188,6 +2363,7 @@ def perform_ssh_creation(chat_id, user, pwd, days):
             # Info Nuevos Protocolos
             if data.get('badvpn'): msg += ICON_PHONE + " <b>BadVPN:</b> <code>7300</code> (Soporte Juegos/Llamadas)\n"
             if data.get('dropbear'): msg += ICON_BEAR + " <b>Dropbear:</b> <code>" + str(data.get('dropbear')) + "</code>\n"
+            if data.get('ssl_tunnel'): msg += "🚀 <b>SSL Tunnel:</b> <code>" + str(data.get('ssl_tunnel')) + "</code>\n"
             # Falcon Proxy Info
             if os.path.exists("/etc/falconproxy.conf"):
                 try: 
