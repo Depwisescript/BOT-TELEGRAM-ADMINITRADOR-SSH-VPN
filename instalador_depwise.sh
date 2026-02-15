@@ -147,7 +147,7 @@ eliminar_user() {
 listar_users() {
     echo "USERS_LIST:"
     cut -d: -f1,7 /etc/passwd | grep "/bin/bash" | cut -d: -f1 | while read user; do
-        exp=$(chage -l "$user" | grep "Account expires" | cut -d: -f2)
+        exp=$(LC_ALL=C chage -l "$user" | grep "Account expires" | cut -d: -f2)
         if [[ "$exp" != *"never"* ]]; then echo "- $user (Vence:$exp)"; fi
     done
 }
@@ -995,6 +995,72 @@ EOF
 ENDFUNC
 
 # --- MONITOR DE RECURSOS ---
+
+# --- OPTIMIZACIONES ---
+cat << 'ENDFUNC' >> ssh_manager.sh
+
+optimizar_servidor() {
+    # Verificar kernel 4.9+
+    kernel_version=$(uname -r | cut -d- -f1)
+    major_version=$(echo $kernel_version | cut -d. -f1)
+    minor_version=$(echo $kernel_version | cut -d. -f2)
+
+    if [ "$major_version" -lt 4 ] || ([ "$major_version" -eq 4 ] && [ "$minor_version" -lt 9 ]); then
+        echo "ERROR_KERNEL_OLD"
+        return 1
+    fi
+
+    echo "Respaldo sysctl.conf..."
+    cp /etc/sysctl.conf /etc/sysctl.conf.bak
+
+    # Limpiar configuraciones previas de BBR
+    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+    sed -i '/fs.file-max/d' /etc/sysctl.conf
+    sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
+    sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_rmem/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_mtu_probing/d' /etc/sysctl.conf
+    
+    echo "Aplicando BBR y Optimizaciones..."
+    cat <<EOF >> /etc/sysctl.conf
+fs.file-max = 1000000
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.tcp_mtu_probing = 1
+EOF
+
+    sysctl -p
+    echo "OPTIMIZED_BBR_ON"
+}
+
+desactivar_optimizacion() {
+    echo "Restaurando sysctl.conf..."
+    # Si existe backup, restaurar
+    if [ -f /etc/sysctl.conf.bak ]; then
+        mv /etc/sysctl.conf.bak /etc/sysctl.conf
+    else
+        # Si no, limpiar manual
+        sed -i '/net.core.default_qdisc=fq/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_congestion_control=bbr/d' /etc/sysctl.conf
+        sed -i '/fs.file-max = 1000000/d' /etc/sysctl.conf
+        sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
+        sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_rmem/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_mtu_probing/d' /etc/sysctl.conf
+    fi
+    sysctl -p
+    echo "OPTIMIZED_BBR_OFF"
+}
+ENDFUNC
+
+# --- MONITOR DE RECURSOS ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 
 obtener_recursos() {
@@ -1048,6 +1114,8 @@ case "$1" in
     eliminar_falcon_proxy) eliminar_falcon_proxy ;;
     instalar_ssl_tunnel) instalar_ssl_tunnel "$2" ;;
     eliminar_ssl_tunnel) eliminar_ssl_tunnel ;;
+    optimizar_servidor) optimizar_servidor ;;
+    desactivar_optimizacion) desactivar_optimizacion ;;
     obtener_recursos) obtener_recursos ;;
 esac
 ENDFUNC
@@ -1145,6 +1213,7 @@ def load_data():
         # Nuevos protocolos
         if 'badvpn' not in data: data['badvpn'] = False
         if 'dropbear' not in data: data['dropbear'] = 0
+        if 'ssh_time_users' not in data: data['ssh_time_users'] = {}
         
         if data['proxydt'].get('token') == "": data['proxydt']['token'] = "V55cFY8zTictLCPfviiuX5DHjs15"
         return data
@@ -1186,6 +1255,13 @@ def delete_user_msg(message):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
 
+def delete_later(chat_id, message_id, delay=5):
+    def _run():
+        time.sleep(delay)
+        try: bot.delete_message(chat_id, message_id)
+        except: pass
+    threading.Thread(target=_run).start()
+
 def render_progress_bar(percent, length=10):
     percent = float(percent)
     fill = int(length * percent / 100)
@@ -1204,7 +1280,15 @@ def main_menu(chat_id, message_id=None):
     is_adm = is_admin(chat_id)
     
     if not data.get('public_access', True) and not is_adm:
-        text = ICON_LOCK + " <b>SISTEMA PRIVADO</b>\nEl bot está restringido por el administrador."
+        text = "⛔ <b>ACCESO DENEGADO</b>\n\n"
+        text += "Este Bot es privado y exclusivo para miembros autorizados.\n\n"
+        text += "🚀 <b>¿QUIERES ACCESO O TENER TU PROPIO BOT?</b>\n"
+        text += "Ofrecemos las mejores herramientas VPN y Scripts del mercado.\n\n"
+        text += "✅ Soporte 24/7\n✅ Actualizaciones Constantes\n✅ Calidad Garantizada\n\n"
+        text += "👤 <b>Ventas / Admin:</b> @Dan3651\n"
+        text += "📢 <b>Canal Oficial:</b> @Depwise2\n\n"
+        text += "<i>Contacta ahora para autorización.</i>"
+        
         if message_id:
             try: bot.edit_message_text(text, chat_id, message_id, parse_mode='HTML')
             except: bot.send_message(chat_id, text, parse_mode='HTML')
@@ -1306,6 +1390,13 @@ def callback_query(call):
         bot.edit_message_text("🔑 <b>Introduce el Password para ZIVPN:</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         bot.register_next_step_handler(call.message, process_zivpn_pass)
     elif call.data == "menu_eliminar":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_USER + " Eliminar SSH", callback_data="del_ssh_menu"))
+        markup.add(types.InlineKeyboardButton("🛰️ Eliminar ZIVPN", callback_data="del_zivpn_menu"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+        bot.edit_message_text(ICON_DEL + " <b>¿Qué deseas eliminar?</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "del_ssh_menu":
         is_sa = (chat_id == SUPER_ADMIN)
         data = load_data()
         if is_sa:
@@ -1318,9 +1409,32 @@ def callback_query(call):
             users = "\n".join(["- " + u for u in user_list]) if user_list else "Vacio"
             
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
-        bot.edit_message_text(ICON_USER + " <b>ELIMINAR ACCESOS:</b>\n\n<b>SSH:</b>\n" + users + "\n\nEscribe nombre:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_eliminar"))
+        bot.edit_message_text(ICON_USER + " <b>ELIMINAR SSH:</b>\n\n<b>Usuarios:</b>\n" + users + "\n\nEscribe nombre:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         bot.register_next_step_handler(call.message, process_delete)
+
+    elif call.data == "del_zivpn_menu":
+        if not is_admin(chat_id) and chat_id != SUPER_ADMIN:
+             bot.answer_callback_query(call.id, "⛔ Acceso denegado.", show_alert=True)
+             return
+             
+        data = load_data()
+        zivpn_users = data.get('zivpn_users', {})
+        zivpn_owners = data.get('zivpn_owners', {})
+        
+        # Filtrar usuarios ZIVPN
+        my_zivpn = []
+        if chat_id == SUPER_ADMIN:
+            my_zivpn = list(zivpn_users.keys())
+        else:
+            my_zivpn = [pwd for pwd in zivpn_users if zivpn_owners.get(pwd) == str(chat_id)]
+            
+        list_str = "\n".join(["- " + p for p in my_zivpn]) if my_zivpn else "Vacio"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_eliminar"))
+        bot.edit_message_text("🛰️ <b>ELIMINAR ZIVPN:</b>\n\n<b>Passwords:</b>\n" + list_str + "\n\nEscribe el password a borrar:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        bot.register_next_step_handler(call.message, process_delete_zivpn_input)
 
     # --- MENU EDITAR ---
     elif call.data == "menu_editar":
@@ -1517,6 +1631,7 @@ def callback_query(call):
             types.InlineKeyboardButton(ICON_BEAR + " Dropbear (SSH Mini)", callback_data="dropbear_menu"),
             types.InlineKeyboardButton("🦅 Falcon Proxy (WS)", callback_data="falcon_menu"),
             types.InlineKeyboardButton("🚀 SSL Tunnel (HAProxy)", callback_data="ssl_tunnel_menu"),
+            types.InlineKeyboardButton("⚡ Optimizar Servidor (BBR)", callback_data="dev_optimize_menu"),
             types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main")
         )
         bot.edit_message_text(ICON_GEAR + " <b>GESTIÓN DE PROTOCOLOS</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
@@ -1535,6 +1650,49 @@ def callback_query(call):
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
         bot.edit_message_text(f"🚀 <b>SSL Tunnel (HAProxy)</b>\nEstado: {st}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
 
+    elif call.data == "dev_optimize_menu":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⚡ Activar TCP BBR + Opti", callback_data="op_bbr_on"))
+        markup.add(types.InlineKeyboardButton("🗑️ Quitar BBR (Default)", callback_data="op_bbr_off"))
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
+        
+        msg = "⚡ <b>OPTIMIZADOR DE SERVIDOR</b>\n\n"
+        msg += "Esto aplicará:\n"
+        msg += "• TCP BBR (Google)\n"
+        msg += "• Ajustes de Sysctl (Buffers)\n"
+        msg += "• Menor Latencia\n\n"
+        msg += "<i>Requiere Kernel 4.9+</i>"
+        
+        bot.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+
+    elif call.data == "op_bbr_on":
+        bot.edit_message_text("⏳ <b>Optimizando Servidor...</b>\nPor favor espera.", chat_id, msg_id, parse_mode='HTML')
+        
+        def _run_opt():
+            res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'optimizar_servidor'], capture_output=True, text=True)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="dev_optimize_menu"))
+            
+            if "OPTIMIZED_BBR_ON" in res.stdout:
+                bot.edit_message_text("✅ <b>SERVIDOR OPTIMIZADO</b>\n\nSe ha activado TCP BBR y ajustado el Sysctl.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            elif "ERROR_KERNEL_OLD" in res.stdout:
+                bot.edit_message_text("❌ <b>Error: Kernel Muy Viejo</b>\nNecesitas Kernel 4.9+ para usar BBR.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            else:
+                bot.edit_message_text(f"⚠️ <b>Resultado Inesperado:</b>\n{res.stdout[-100:]}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+        
+        threading.Thread(target=_run_opt).start()
+
+    elif call.data == "op_bbr_off":
+        bot.edit_message_text("⏳ <b>Restaurando configuración original...</b>", chat_id, msg_id, parse_mode='HTML')
+        
+        def _run_deopt():
+            subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'desactivar_optimizacion'])
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="dev_optimize_menu"))
+            bot.edit_message_text("✅ <b>BBR DESACTIVADO</b>\n\nEl servidor ha vuelto a la configuración original (Cubic).", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            
+        threading.Thread(target=_run_deopt).start()
+
     elif call.data == "ask_ssl_tunnel":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("Cancelar", callback_data="ssl_tunnel_menu"))
@@ -1547,7 +1705,9 @@ def callback_query(call):
         d = load_data(); 
         if 'ssl_tunnel' in d: del d['ssl_tunnel']
         save_data(d)
-        bot.send_message(chat_id, "✅ SSL Tunnel eliminado.")
+        save_data(d)
+        sent = bot.send_message(chat_id, "✅ SSL Tunnel eliminado.")
+        delete_later(chat_id, sent.message_id)
         main_menu(chat_id, msg_id)
     elif call.data == "menu_slowdns" and chat_id == SUPER_ADMIN:
         d = load_data()
@@ -1702,7 +1862,8 @@ def callback_query(call):
             # Mostrar error real en un mensaje
             err_msg = res.stdout.strip() or "Error desconocido."
             bot.answer_callback_query(call.id, "❌ Fallo al abrir puerto.")
-            bot.send_message(chat_id, f"❌ <b>Error al abrir ProxyDT:</b>\n<code>{html_lib.escape(err_msg)}</code>", parse_mode='HTML')
+            sent = bot.send_message(chat_id, f"❌ <b>Error al abrir ProxyDT:</b>\n<code>{html_lib.escape(err_msg)}</code>", parse_mode='HTML')
+            delete_later(chat_id, sent.message_id)
         show_proxydt_menu(chat_id, msg_id)
     elif call.data == "remove_slowdns" and chat_id == SUPER_ADMIN:
         bot.answer_callback_query(call.id, "🗑️ Desinstalando...")
@@ -1794,13 +1955,27 @@ def callback_query(call):
     elif call.data == "del_falcon":
         bot.answer_callback_query(call.id, "🗑️ Eliminando...")
         subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_falcon_proxy'])
-        bot.send_message(chat_id, "✅ Falcon Proxy eliminado.")
+        sent = bot.send_message(chat_id, "✅ Falcon Proxy eliminado.")
+        delete_later(chat_id, sent.message_id)
         main_menu(chat_id, msg_id)
 
     elif call.data == "force_cleanup" and chat_id == SUPER_ADMIN:
         bot.answer_callback_query(call.id, "🧹 Analizando usuarios...")
         count = cleanup_expired(force_report=True, chat_report=chat_id)
-        if count == 0: bot.send_message(chat_id, "✅ <b>Limpieza Completada:</b> No se encontraron usuarios vencidos.", parse_mode='HTML')
+        count = cleanup_expired(force_report=True, chat_report=chat_id)
+        if count == 0: 
+            sent = bot.send_message(chat_id, "✅ <b>Limpieza Completada:</b> No se encontraron usuarios vencidos.", parse_mode='HTML')
+            delete_later(chat_id, sent.message_id)
+    
+    elif call.data.startswith("zd_"):
+        pwd = call.data.replace("zd_", "")
+        process_zivpn_days_ask(call.message, pwd)
+    elif call.data.startswith("zh_"):
+        pwd = call.data.replace("zh_", "")
+        process_zivpn_hours_ask(call.message, pwd)
+    elif call.data.startswith("zm_"):
+        pwd = call.data.replace("zm_", "")
+        process_zivpn_mins_ask(call.message, pwd)
     
     # --- SSH INFO MANUAL/AUTO CALLBACKS ---
     elif call.data == "ssh_pass_auto":
@@ -1819,6 +1994,29 @@ def callback_query(call):
     elif call.data == "back_main":
         bot.clear_step_handler_by_chat_id(chat_id=chat_id)
         main_menu(chat_id, msg_id)
+
+    # --- DURATION TYPE HANDLERS ---
+    elif call.data in ["param_days", "param_mins", "param_hours"]:
+        user = TEMP_SSH_CREATION.get(chat_id, {}).get('user')
+        if not user: 
+            main_menu(chat_id, msg_id)
+            return
+
+        if call.data == "param_days":
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+            bot.edit_message_text(ICON_TIME + " <b>¿Días de vigencia?</b>", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            bot.register_next_step_handler(call.message, lambda m: process_ssh_days(m, user))
+        elif call.data == "param_hours":
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+            bot.edit_message_text(f"⏱️ <b>¿Cuántas HORAS?</b>\nUsuario: {user}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            bot.register_next_step_handler(call.message, lambda m: process_ssh_hours(m, user))
+        else:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+            bot.edit_message_text(f"⏱️ <b>¿Cuántos MINUTOS?</b>\nUsuario: {user}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            bot.register_next_step_handler(call.message, lambda m: process_ssh_minutes(m, user))
 
 def show_pro_settings(chat_id, message_id):
     data = load_data()
@@ -1843,6 +2041,8 @@ def show_pro_settings(chat_id, message_id):
 def process_save_info(message):
     delete_user_msg(message)
     data = load_data(); data['extra_info'] = message.text; save_data(data)
+    sent = bot.send_message(message.chat.id, "✅ Info extra guardada.")
+    delete_later(message.chat.id, sent.message_id)
     main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
 def process_domain(message):
@@ -1854,10 +2054,12 @@ def process_domain(message):
         data['cloudflare_domain'] = ""
         save_data(data)
         msg = bot.send_message(message.chat.id, "✅ <b>Dominio eliminado correctamente.</b>", parse_mode='HTML')
+        delete_later(message.chat.id, msg.message_id)
     else:
         data['cloudflare_domain'] = domain
         save_data(data)
         msg = bot.send_message(message.chat.id, f"✅ <b>Dominio configurado:</b> <code>{domain}</code>", parse_mode='HTML')
+        delete_later(message.chat.id, msg.message_id)
     
     show_pro_settings(message.chat.id, USER_STEPS.get(message.chat.id))
     time.sleep(3)
@@ -1873,10 +2075,12 @@ def process_cloudfront(message):
         data['cloudfront_domain'] = ""
         save_data(data)
         msg = bot.send_message(message.chat.id, "✅ <b>CloudFront eliminado.</b>", parse_mode='HTML')
+        delete_later(message.chat.id, msg.message_id)
     else:
         data['cloudfront_domain'] = domain
         save_data(data)
         msg = bot.send_message(message.chat.id, f"✅ <b>CloudFront configurado:</b> <code>{domain}</code>", parse_mode='HTML')
+        delete_later(message.chat.id, msg.message_id)
     
     show_pro_settings(message.chat.id, USER_STEPS.get(message.chat.id))
     time.sleep(3)
@@ -1894,12 +2098,17 @@ def process_admin_id(message):
 def finalize_admin(message, aid):
     delete_user_msg(message)
     data = load_data(); data['admins'][aid] = {"alias": message.text.strip()}; save_data(data)
+    sent = bot.send_message(message.chat.id, f"✅ Admin {aid} agregado.")
+    delete_later(message.chat.id, sent.message_id)
     main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
 def process_admin_del(message):
     delete_user_msg(message)
     data = load_data(); aid = message.text.strip()
-    if aid in data['admins']: del data['admins'][aid]; save_data(data)
+    if aid in data['admins']: 
+        del data['admins'][aid]; save_data(data)
+        sent = bot.send_message(message.chat.id, f"🗑️ Admin {aid} eliminado.")
+        delete_later(message.chat.id, sent.message_id)
     main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
 def process_username(message):
@@ -1909,28 +2118,85 @@ def process_username(message):
     
     # 1. Verificar Nombre Valido
     if not user.isalnum():
-        bot.send_message(chat_id, "❌ <b>Nombre inválido:</b> Solo letras y números.", parse_mode='HTML')
+        sent = bot.send_message(chat_id, "❌ <b>Nombre inválido:</b> Solo letras y números.", parse_mode='HTML')
+        delete_later(chat_id, sent.message_id)
         main_menu(chat_id, USER_STEPS.get(chat_id))
         return
 
-    # 2. Gestion de Dias (Solo Super Admin)
-    if chat_id == SUPER_ADMIN:
+    # 2. Gestion de Dias (Admins y Super Admin)
+    # Todos los admins ven el menu completo
+    if is_admin(chat_id):
         markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📅 Días", callback_data="param_days"),
+                   types.InlineKeyboardButton("⏱️ Horas", callback_data="param_hours"),
+                   types.InlineKeyboardButton("⏱️ Minutos", callback_data="param_mins"))
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
-        bot.edit_message_text(ICON_TIME + " <b>¿Días de vigencia?</b>", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
-        bot.register_next_step_handler(message, lambda m: process_ssh_days(m, user))
+        bot.edit_message_text(ICON_TIME + " <b>¿Tipo de Duración?</b>", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+        
+        # Guardamos usuario temporalmente
+        TEMP_SSH_CREATION[chat_id] = {'user': user}
     else: 
-        # Admins Secundarios y Publico
-        days = 3 if not is_admin(chat_id) else 7
+        # Publico General (No Admins)
+        # Limitado a 3 dias automaticos
+        days = 3
         ask_ssh_pass_mode(chat_id, user, days)
+
+
+
+def process_ssh_hours(message, user):
+    delete_user_msg(message)
+    try:
+        hours = int(message.text.strip())
+        if hours < 1: raise ValueError
+        
+        # Validacion Limite Admin (No Super)
+        if message.chat.id != SUPER_ADMIN and hours > 168: # 7 dias * 24h
+            sent = bot.send_message(message.chat.id, "❌ <b>Límite excedido:</b> Máximo 168 Horas (7 Días).", parse_mode='HTML')
+            delete_later(message.chat.id, sent.message_id)
+            main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+            return
+
+        ask_ssh_pass_mode(message.chat.id, user, f"{hours}h")
+    except:
+        sent = bot.send_message(message.chat.id, "❌ Error: Numero invalido (Min 1).")
+        delete_later(message.chat.id, sent.message_id)
+        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+
+def process_ssh_minutes(message, user):
+    delete_user_msg(message)
+    try:
+        mins = int(message.text.strip())
+        if mins < 1: raise ValueError
+        
+        # Validacion Limite Admin (No Super)
+        if message.chat.id != SUPER_ADMIN and mins > 10080: # 7 dias * 24h * 60m
+            sent = bot.send_message(message.chat.id, "❌ <b>Límite excedido:</b> Máximo 10080 Minutos (7 Días).", parse_mode='HTML')
+            delete_later(message.chat.id, sent.message_id)
+            main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+            return
+
+        ask_ssh_pass_mode(message.chat.id, user, f"{mins}m")
+    except:
+        sent = bot.send_message(message.chat.id, "❌ Error: Numero invalido (Min 1).")
+        delete_later(message.chat.id, sent.message_id)
+        main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
 def process_ssh_days(message, user):
     delete_user_msg(message)
     try:
         days = int(message.text.strip())
+        
+        # Validacion Limite Admin (No Super)
+        if message.chat.id != SUPER_ADMIN and days > 7:
+            sent = bot.send_message(message.chat.id, "❌ <b>Límite excedido:</b> Máximo 7 Días.", parse_mode='HTML')
+            delete_later(message.chat.id, sent.message_id)
+            main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+            return
+
         ask_ssh_pass_mode(message.chat.id, user, days)
     except:
-        bot.send_message(message.chat.id, "❌ Error: Numero invalido.")
+        sent = bot.send_message(message.chat.id, "❌ Error: Numero invalido.")
+        delete_later(message.chat.id, sent.message_id)
         main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
 def ask_ssh_pass_mode(chat_id, user, days):
@@ -2228,6 +2494,37 @@ def run_zivpn_removal(chat_id, msg_id):
     time.sleep(3)
     main_menu(chat_id, msg_id)
 
+def process_delete_zivpn_input(message):
+    delete_user_msg(message)
+    pwd = message.text.strip()
+    chat_id = message.chat.id
+    
+    data = load_data()
+    if pwd not in data.get('zivpn_users', {}):
+        sent = bot.send_message(chat_id, "❌ <b>Error:</b> Password no encontrado.", parse_mode='HTML')
+        delete_later(chat_id, sent.message_id)
+        main_menu(chat_id, USER_STEPS.get(chat_id))
+        return
+
+    # Verificar propiedad si no es Super Admin
+    if chat_id != SUPER_ADMIN and str(data.get('zivpn_owners', {}).get(pwd)) != str(chat_id):
+        sent = bot.send_message(chat_id, "⛔ <b>Error:</b> Ese password no es tuyo.", parse_mode='HTML')
+        delete_later(chat_id, sent.message_id)
+        main_menu(chat_id, USER_STEPS.get(chat_id))
+        return
+
+    # Ejecutar borrado
+    subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'del', pwd])
+    
+    # Limpiar DB
+    del data['zivpn_users'][pwd]
+    if pwd in data.get('zivpn_owners', {}): del data['zivpn_owners'][pwd]
+    save_data(data)
+    
+    sent = bot.send_message(chat_id, f"✅ <b>ZIVPN Eliminado:</b> <code>{pwd}</code>", parse_mode='HTML')
+    delete_later(chat_id, sent.message_id)
+    main_menu(chat_id, USER_STEPS.get(chat_id))
+
 def process_zivpn_pass(message):
     delete_user_msg(message)
     pwd = message.text.strip()
@@ -2238,39 +2535,107 @@ def process_zivpn_pass(message):
     # Sistema de permisos: Super Admin puede elegir, Admin 7 días, Público 3 días
     if is_sa:
         markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📅 Días", callback_data=f"zd_{pwd}"),
+                   types.InlineKeyboardButton("⏱️ Horas", callback_data=f"zh_{pwd}"),
+                   types.InlineKeyboardButton("⏱️ Minutos", callback_data=f"zm_{pwd}"))
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="menu_crear"))
-        bot.edit_message_text(f"🔑 Pass: <code>{pwd}</code>\n{ICON_TIME} <b>¿Cuántos días de vigencia?</b>", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
-        bot.register_next_step_handler(message, lambda m: finalize_zivpn(m, pwd))
+        try:
+            bot.edit_message_text(f"🔑 Pass: <code>{pwd}</code>\n{ICON_TIME} <b>¿Tipo de Duración?</b>", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+        except:
+            # Si el mensaje anterior fue borrado, enviamos uno nuevo
+            sent = bot.send_message(chat_id, f"🔑 Pass: <code>{pwd}</code>\n{ICON_TIME} <b>¿Tipo de Duración?</b>", parse_mode='HTML', reply_markup=markup)
+            USER_STEPS[chat_id] = sent.message_id
     else:
         # Admin: 7 días, Público: 3 días
         days = 7 if is_adm else 3
         finalize_zivpn(message, pwd, days)
 
-def finalize_zivpn(message, pwd, days=None):
+# --- ZIVPN DURATION HANDLERS ---
+def process_zivpn_days_ask(message, pwd):
+    # delete_user_msg(message) # Causaba que se borrara el menú antes de editarlo
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="menu_crear"))
+    try:
+        bot.edit_message_text(f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce los <b>Días</b>:", message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML', reply_markup=markup)
+    except:
+        sent = bot.send_message(message.chat.id, f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce los <b>Días</b>:", parse_mode='HTML', reply_markup=markup)
+        USER_STEPS[message.chat.id] = sent.message_id
+    bot.register_next_step_handler(message, lambda m: finalize_zivpn(m, pwd))
+
+def process_zivpn_hours_ask(message, pwd):
+    # delete_user_msg(message)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="menu_crear"))
+    try:
+        bot.edit_message_text(f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce las <b>Horas</b>:", message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML', reply_markup=markup)
+    except:
+        sent = bot.send_message(message.chat.id, f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce las <b>Horas</b>:", parse_mode='HTML', reply_markup=markup)
+        USER_STEPS[message.chat.id] = sent.message_id
+    bot.register_next_step_handler(message, lambda m: finalize_zivpn(m, pwd, is_hours=True))
+
+def process_zivpn_mins_ask(message, pwd):
+    # delete_user_msg(message)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="menu_crear"))
+    try:
+        bot.edit_message_text(f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce los <b>Minutos</b>:", message.chat.id, USER_STEPS.get(message.chat.id), parse_mode='HTML', reply_markup=markup)
+    except:
+        sent = bot.send_message(message.chat.id, f"🔑 <b>ZIVPN ({pwd})</b>\nIntroduce los <b>Minutos</b>:", parse_mode='HTML', reply_markup=markup)
+        USER_STEPS[message.chat.id] = sent.message_id
+    bot.register_next_step_handler(message, lambda m: finalize_zivpn(m, pwd, is_minutes=True))
+
+def finalize_zivpn(message, pwd, days=None, is_hours=False, is_minutes=False):
     delete_user_msg(message)
     try:
         chat_id = message.chat.id
         if days is None:
-            try: days = int(message.text)
+            try: 
+                days = int(message.text)
+                if days < 1: raise ValueError
             except ValueError:
-                bot.send_message(chat_id, "❌ Error: Los dias deben ser un numero.")
+                sent = bot.send_message(chat_id, "❌ Error: Numero invalido.")
+                delete_later(chat_id, sent.message_id)
                 main_menu(chat_id, USER_STEPS.get(chat_id))
                 return
 
-        status_msg = bot.send_message(chat_id, f"⏳ <b>Registrando ZIVPN ({days} dias)...</b>", parse_mode='HTML')
+        date_show = f"{days} dias"
+        if is_hours: date_show = f"{days} horas"
+        if is_minutes: date_show = f"{days} minutos"
+
+        msg_loading = f"⏳ <b>Registrando ZIVPN ({date_show})...</b>"
+        status_msg = None
+        try:
+            # Intentar editar el mensaje anterior (el de "Introduce los minutos" o el menú)
+            if USER_STEPS.get(chat_id):
+                bot.edit_message_text(msg_loading, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML')
+                # Creamos un objeto dummy o usamos una clase simple para simular el objeto Message y guardar el ID
+                # Esto es para que el bloque de exito posterior pueda usar status_msg.message_id
+                class MockMsg: pass
+                status_msg = MockMsg()
+                status_msg.message_id = USER_STEPS.get(chat_id)
+            else:
+                status_msg = bot.send_message(chat_id, msg_loading, parse_mode='HTML')
+        except:
+            status_msg = bot.send_message(chat_id, msg_loading, parse_mode='HTML')
         
-        # Llamada a bash para agregar al config.json y reiniciar
+        # Llamada a bash (Para zivpn en bash, solo almacenamos password, la expiracion la maneja el bot)
         cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'add', pwd]
         res = subprocess.run(cmd, capture_output=True, text=True)
         
-        try: bot.delete_message(chat_id, status_msg.message_id)
-        except: pass
+        # try: bot.delete_message(chat_id, status_msg.message_id)
+        # except: pass
 
         if "ZIVPN_PASS_UPDATED" in res.stdout:
-            # Calcular fecha
-            exp_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+            # Calcular fecha exacta
+            now = datetime.now()
+            if is_minutes:
+                exp_date = (now + timedelta(minutes=days)).strftime("%Y-%m-%d %H:%M:%S")
+            elif is_hours:
+                exp_date = (now + timedelta(hours=days)).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                exp_date = (now + timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Guardar en base de datos bot (para tracking de dueño)
+            # Guardar en base de datos bot
             data = load_data()
             if 'zivpn_users' not in data: data['zivpn_users'] = {}
             if 'zivpn_owners' not in data: data['zivpn_owners'] = {}
@@ -2295,22 +2660,36 @@ def finalize_zivpn(message, pwd, days=None):
             msg += "\n🔐 <b>PASSWORD:</b> <code>" + pwd + "</code>\n"
             msg += "📡 <b>PUERTOS UDP:</b> <code>6000-19999</code>\n"
             msg += "⚠️ <b>PUERTO VPN:</b> <code>5667</code>\n"
-            msg += "📅 <b>EXPIRA:</b> " + exp_date + f" ({days} dias)\n"
+            msg += "📅 <b>EXPIRA:</b> " + exp_date + f" ({date_show})\n"
             msg += "--------------------------------------\n"
             msg += ICON_MIC + " @Depwise2 | " + ICON_DEV + " @Dan3651"
             
-            # Enviar mensaje final
+            # Enviar mensaje final y auto-borrar
             if USER_STEPS.get(chat_id):
+                # main_menu(chat_id, USER_STEPS.get(chat_id)) # Restaurar menu --> REMOVED
+                
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
-                try: bot.edit_message_text(msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
-                except: bot.send_message(chat_id, msg, parse_mode='HTML')
+                
+                try: 
+                    # Intentar editar el mensaje de "Registrando..." (status_msg)
+                    bot.edit_message_text(msg, chat_id, status_msg.message_id, parse_mode='HTML', reply_markup=markup)
+                except:
+                    # Si falla, enviar nuevo
+                    sent = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                    
+                # delete_later eliminado para que quede el mensaje con las credenciales
             else:
-                bot.send_message(chat_id, msg, parse_mode='HTML')
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+                sent = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                USER_STEPS[chat_id] = sent.message_id
+                # delete_later eliminado para que quede el mensaje con las credenciales
                 
         else:
             err = res.stdout + "\n" + res.stderr
-            bot.send_message(chat_id, f"❌ <b>Error al crear ZIVPN:</b>\n<pre>{html_lib.escape(err[-200:])}</pre>", parse_mode='HTML')
+            sent = bot.send_message(chat_id, f"❌ <b>Error al crear ZIVPN:</b>\n<pre>{html_lib.escape(err[-200:])}</pre>", parse_mode='HTML')
+            delete_later(chat_id, sent.message_id)
             main_menu(chat_id, USER_STEPS.get(chat_id))
 
     except Exception as e:
@@ -2377,20 +2756,54 @@ def perform_ssh_creation(chat_id, user, pwd, days):
         # Limpieza de expirados antes de crear
         cleanup_expired()
     
-        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, str(days)]
+        # Manejo de Minutos, Horas o Dias
+        is_minutes = str(days).endswith("m")
+        is_hours = str(days).endswith("h")
+        final_days = days
+        
+        if is_minutes or is_hours:
+            # Para el sistema linux, le damos 1 dia de vida minima para que no expire al instante
+            # La limpieza exacta la hara el bot
+            cmd_days = "1"
+        else:
+            cmd_days = str(days)
+
+        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, cmd_days]
         
         # Ejecutar y capturar TODO (stdout + stderr)
         res = subprocess.run(cmd, capture_output=True, text=True)
         
         if "SUCCESS" in res.stdout:
+            # Si es por minutos u horas, guardar timestamp exacto
+            if is_minutes or is_hours:
+                if is_minutes:
+                    duration_val = int(str(days).replace("m", ""))
+                    exp_dt_obj = datetime.now() + timedelta(minutes=duration_val)
+                    disp_days = f"{duration_val} mins"
+                else:
+                    duration_val = int(str(days).replace("h", ""))
+                    exp_dt_obj = datetime.now() + timedelta(hours=duration_val)
+                    disp_days = f"{duration_val} horas"
+
+                exp_str = exp_dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+                
+                d = load_data()
+                if 'ssh_time_users' not in d: d['ssh_time_users'] = {}
+                d['ssh_time_users'][user] = exp_str
+                save_data(d)
+                
+                dt = f"HOY {exp_dt_obj.strftime('%H:%M:%S')}"
+            else:
+                # Extraer fecha de res.stdout normal
+                try: dt = res.stdout.strip().split('|')[2]
+                except: dt = "Indefinida"
+                disp_days = f"{days} dias"
+            
             ip = get_public_ip()
             data = load_data()
             extra = data.get('extra_info', '')
             domain = data.get('cloudflare_domain', '')
             cfront = data.get('cloudfront_domain', '')
-            # Extraer fecha de res.stdout
-            try: dt = res.stdout.strip().split('|')[2]
-            except: dt = "Indefinida"
             
             msg = ICON_CHECK + " <b>BOT TELEGRAM DEPWISE V6.7</b>\n--------------------------------------\n"
             msg += ICON_PIN + " <b>HOST IP:</b> <code>" + ip + "</code> \n"
@@ -2429,7 +2842,7 @@ def perform_ssh_creation(chat_id, user, pwd, days):
                             msg += "🦅 <b>Falcon Proxy:</b> <code>" + fp + "</code>\n"
                 except: pass
     
-            msg += "<b>VENCE:</b> " + dt + " (" + str(days) + " dias)\n--------------------------------------\n"
+            msg += "<b>VENCE:</b> " + dt + " (" + disp_days + ")\n--------------------------------------\n"
             msg += ICON_MIC + " @Depwise2 | " + ICON_DEV + " @Dan3651"
             
             # Registrar dueño
@@ -2438,15 +2851,28 @@ def perform_ssh_creation(chat_id, user, pwd, days):
             save_data(data)
     
             if USER_STEPS.get(chat_id):
+                # Restaurar menu principal en el mensaje original --> REMOVED (User request)
+                # main_menu(chat_id, USER_STEPS.get(chat_id))
+                
+                # Enviar resultado EDITANDO el mensaje de "Cargando..." si es posible
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver al Menú", callback_data="back_main"))
-                try: bot.edit_message_text(msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
-                except: bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                
+                try:
+                    # Intenta editar el mensaje de "Creando..."
+                    msg_id_loading = USER_STEPS.get(chat_id)
+                    bot.edit_message_text(msg, chat_id, msg_id_loading, parse_mode='HTML', reply_markup=markup)
+                except:
+                    # Si falla (muy viejo o borrado), envia uno nuevo
+                    sent = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                    
+                # delete_later(chat_id, sent.message_id, delay=10) # REMOVED: Credenciales deben persistir
             else:
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver al Menú", callback_data="back_main"))
-                msg_obj = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
-                USER_STEPS[chat_id] = msg_obj.message_id
+                sent = bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+                USER_STEPS[chat_id] = sent.message_id
+                # delete_later(chat_id, sent.message_id, delay=10) # REMOVED: Credenciales deben persistir
         else:
             # Manejo de Error Detallado
             error_detail = res.stdout.strip() + "\n" + res.stderr.strip()
@@ -2458,17 +2884,15 @@ def perform_ssh_creation(chat_id, user, pwd, days):
                 safe_detail = html_lib.escape(error_detail[-300:]) # Ultimos 300 chars
                 error_msg = ICON_X + " <b>FALLO AL CREAR:</b>\n<pre>" + safe_detail + "</pre>"
                 
-            try:
-                bot.edit_message_text(error_msg, chat_id, USER_STEPS.get(chat_id), parse_mode='HTML')
-            except:
-                bot.send_message(chat_id, error_msg, parse_mode='HTML')
-            time.sleep(4)
+            sent = bot.send_message(chat_id, error_msg, parse_mode='HTML')
+            delete_later(chat_id, sent.message_id, delay=5)
             main_menu(chat_id, USER_STEPS.get(chat_id))
             
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
-        bot.send_message(chat_id, f"❌ <b>Error Interno del Bot:</b>\n<pre>{html_lib.escape(str(e))}</pre>", parse_mode='HTML')
+        sent = bot.send_message(chat_id, f"❌ <b>Error Interno del Bot:</b>\n<pre>{html_lib.escape(str(e))}</pre>", parse_mode='HTML')
+        delete_later(chat_id, sent.message_id)
         print(trace) # Imprimir al log del sistema para debug
         time.sleep(3)
         main_menu(chat_id, USER_STEPS.get(chat_id))
@@ -2480,17 +2904,55 @@ def cleanup_expired(force_report=False, chat_report=None):
     deleted_count = 0
     report_msg = "🧹 <b>REPORTE DE LIMPIEZA:</b>\n\n"
     
-    # --- 1. ZIVPN CLEANUP ---
+    # --- 1. ZIVPN CLEANUP (Soporta fechas YYYY-MM-DD y Datetime) ---
     to_del_zivpn = []
     for pwd, exp in data.get('zivpn_users', {}).items():
-        if exp < now_str:
-            subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'del', pwd])
-            to_del_zivpn.append(pwd)
-            report_msg += f"• ZIVPN: <code>{pwd}</code> (Venció: {exp})\n"
-            deleted_count += 1
+        try:
+            # Detectar si es fecha corta o larga
+            if len(exp) > 10:
+                # Es datetime (Minutos/Horas)
+                exp_dt = datetime.strptime(exp, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() > exp_dt:
+                    is_expired = True
+                else:
+                    is_expired = False
+            else:
+                # Es fecha corta (Dias)
+                if exp < now_str:
+                    is_expired = True
+                else:
+                    is_expired = False
+            
+            if is_expired:
+                subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'gestionar_zivpn_pass', 'del', pwd])
+                to_del_zivpn.append(pwd)
+                report_msg += f"• ZIVPN: <code>{pwd}</code> (Venció: {exp})\n"
+                deleted_count += 1
+        except: continue
     
     if to_del_zivpn:
         for p in to_del_zivpn: del data['zivpn_users'][p]
+        save_data(data)
+
+    # --- 1.1 SSH MINUTES CLEANUP ---
+    to_del_mins = []
+    ssh_mins = data.get('ssh_time_users', {})
+    for user, exp_str in ssh_mins.items():
+        try:
+            # Format: YYYY-MM-DD HH:MM:SS
+            exp_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() > exp_dt:
+                subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'eliminar_user', user])
+                to_del_mins.append(user)
+                report_msg += f"• SSH(Min): <code>{user}</code> (Venció: {exp_str})\n"
+                deleted_count += 1
+        except Exception as e:
+            print(f"Error parse min user {user}: {e}")
+
+    if to_del_mins:
+        for u in to_del_mins: 
+            del data['ssh_time_users'][u]
+            if u in data['ssh_owners']: del data['ssh_owners'][u]
         save_data(data)
 
     # --- 2. SSH USERS CLEANUP ---
@@ -2501,7 +2963,7 @@ def cleanup_expired(force_report=False, chat_report=None):
             # Iterar copia de keys para evitar error runtime size change
             for user in list(owners.keys()):
                 # Obtener expiracion real del sistema
-                cmd = f"chage -l {user} | grep 'Account expires'"
+                cmd = f"LC_ALL=C chage -l {user} | grep 'Account expires'"
                 # Output format: "Account expires : Feb 05, 2026" or "Account expires : never"
                 try: 
                     res = subprocess.check_output(cmd, shell=True).decode().strip()
@@ -2521,8 +2983,8 @@ def cleanup_expired(force_report=False, chat_report=None):
                         report_msg += f"• SSH: <code>{user}</code> (Venció: {exp_dt.strftime('%Y-%m-%d')})\n"
                         deleted_count += 1
                         
-                except Exception as ex: 
-                    # Usuario no existe en sistema o error parseo
+                except Exception as ex:
+                    print(f"Error checking {user}: {ex}")
                     pass
         except Exception as e:
             print(f"Error en SSH Cleanup: {e}")
@@ -2538,9 +3000,9 @@ def cleanup_expired(force_report=False, chat_report=None):
 def auto_cleanup_loop():
     while True:
         try:
-            # Ejecutar limpieza cada 6 horas (21600 sec)
+            # Ejecutar limpieza cada 60 segundos para soporte minutos
             cleanup_expired()
-            time.sleep(21600) 
+            time.sleep(60) 
         except:
             time.sleep(600) # Si falla, reintentar en 10 min
 
