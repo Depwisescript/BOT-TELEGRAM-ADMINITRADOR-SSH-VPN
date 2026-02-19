@@ -60,6 +60,8 @@ log_info "Instalando dependencias (Core + Build Tools)..."
 log_info "Instalando dependencias (Core + Build Tools)..."
 apt update && apt install -y python3 python3-pip curl python3-requests file net-tools lsof cmake make gcc g++ git jq
 pip3 install pytelegrambotapi --break-system-packages --upgrade 2>/dev/null || pip3 install pytelegrambotapi --upgrade
+# Cargar modulo owner para iptables
+modprobe xt_owner 2>/dev/null || true
 
 cd $PROJECT_DIR
 
@@ -88,6 +90,8 @@ crear_user() {
     local USER=$1
     local PASS=$2
     local DAYS=$3
+    local LIMIT_CONN=$4
+    local LIMIT_GB=$5
     
     if [ -z "$USER" ] || [ -z "$PASS" ] || [ -z "$DAYS" ]; then
         echo "ERROR: Faltan argumentos (User: $USER, Days: $DAYS)"
@@ -133,6 +137,24 @@ crear_user() {
     
     # Verificar exito final
     if id "$USER" &>/dev/null; then
+        # APLICAR LIMITES
+        # 1. Max Logins (limits.conf)
+        if [ ! -z "$LIMIT_CONN" ]; then
+            echo "$USER hard maxlogins $LIMIT_CONN" >> /etc/security/limits.conf
+        fi
+        
+        # 2. Quota GB (iptables owner match)
+        if [ ! -z "$LIMIT_GB" ]; then
+            # Regla para contar trafico de salida (Descarga del cliente)
+            # Primero borramos si existe basura
+            iptables -D OUTPUT -m owner --uid-owner "$USER" -j ACCEPT 2>/dev/null || true
+            iptables -I OUTPUT -m owner --uid-owner "$USER" -j ACCEPT
+            
+            # Guardamos el limite en un archivo para referencia futura
+            mkdir -p /etc/ssh_limits
+            echo "$LIMIT_GB" > "/etc/ssh_limits/$USER.limit"
+        fi
+        
         echo "SUCCESS: $USER|$PASS|$EXP_DATE"
     else
         echo "ERROR: Fallo desconocido al verificar usuario creado"
@@ -142,7 +164,146 @@ crear_user() {
     set -e
 }
 eliminar_user() {
-    if id "$1" &>/dev/null; then userdel -f -r "$1"; echo "SUCCESS"; else echo "ERROR"; fi
+    local USER=$1
+    if id "$USER" &>/dev/null; then 
+        userdel -f -r "$USER"
+        # Limpiar Limites
+        sed -i "/^$USER hard maxlogins/d" /etc/security/limits.conf
+        iptables -D OUTPUT -m owner --uid-owner "$USER" -j ACCEPT 2>/dev/null || true
+        rm -f "/etc/ssh_limits/$USER.limit"
+        echo "SUCCESS"
+    else 
+        echo "ERROR"
+    fi
+}
+check_consumo() {
+    # Evitar crash por set -e
+    set +e
+    local USER=$1
+    
+    # Obtener UID numerico
+    # Obtener UID numerico
+    # FIX: Renombrar variable local UID -> USER_ID (UID es readonly en Bash)
+    local USER_ID=$(id -u "$USER" 2>/dev/null)
+    if [ -z "$USER_ID" ]; then echo "0|Infinito"; set -e; return; fi
+    
+    # ESTRATEGIA: Bash Puro con RegEx "Fin de Linea" (Fail-Safe)
+    # Tu captura muestra: "... owner UID match 1002"
+    # El UID esta AL FINAL. Los paquetes (colision) estan AL PRINCIPIO.
+    # Buscamos: palabra "owner" ...cualquier cosa... y luego UID o USER al final.
+    # Regex: owner.* (UID|USER) [espacios opcionales] final
+    
+    local BYTES=$(iptables -nvx -L OUTPUT | grep -E "owner.*\b($USER_ID|$USER)\s*$" | awk '{print $2}' | head -n 1 || true)
+    
+    # Si falla o vacio es 0
+    if [[ -z "$BYTES" || ! "$BYTES" =~ ^[0-9]+$ ]]; then 
+        BYTES="0"
+    fi
+    
+    # INTENTO 2: Fallback a iptables-save si el anterior fallo (0)
+    if [ "$BYTES" == "0" ]; then
+         local RAW=$(iptables-save -c | grep -E "owner.*$USER_ID\b" || true)
+         if [[ "$RAW" == *":"* ]]; then
+             # Format [pkts:bytes]
+             BYTES=$(echo "$RAW" | awk -F':' '{print $2}' | awk -F']' '{print $1}' | head -n 1)
+         fi
+    fi
+    
+    # Convertir a GB
+    if [ -z "$BYTES" ]; then BYTES="0"; fi
+    local GB=$(awk "BEGIN {printf \"%.6f\", $BYTES/1024/1024/1024}")
+    
+    # Leer Limite
+    local LIMIT="Infinito"
+    if [ -f "/etc/ssh_limits/$USER.limit" ]; then
+        LIMIT=$(cat "/etc/ssh_limits/$USER.limit")
+    fi
+    
+    # Debug flag si sigue siendo 0 y hay proceso
+    local DEBUG=""
+    if [ "$BYTES" == "0" ] && ps -u "$USER" &>/dev/null; then
+         DEBUG=" (Proc: Active)"
+    fi
+    
+    echo "$GB|$LIMIT$DEBUG"
+    set -e
+}
+reset_consumo() {
+    local USER=$1
+    iptables -Z OUTPUT
+    # Nota: iptables -Z resetea TODO o Spec. Si usamos -L con usuario no resetea solo ese counter facilmente
+    # Workaround: Recrear regla
+    iptables -D OUTPUT -m owner --uid-owner "$USER" -j ACCEPT 2>/dev/null
+    iptables -I OUTPUT -m owner --uid-owner "$USER" -j ACCEPT
+    iptables -I OUTPUT -m owner --uid-owner "$USER" -j ACCEPT
+    echo "RESET_OK"
+}
+
+sync_iptables() {
+    # Asegurar que todos los usuarios con limite definido tengan su regla iptables
+    # Esto corrige reglas perdidas por reinicio o usuarios creados antes del parche
+    
+    mkdir -p /etc/ssh_limits
+    for f in /etc/ssh_limits/*.limit; do
+        if [ ! -f "$f" ]; then continue; fi
+        
+        local USER=$(basename "$f" .limit)
+        local UID=$(id -u "$USER" 2>/dev/null)
+        
+        if [ -z "$UID" ]; then
+            # Usuario ya no existe en sistema, borrar limite
+            rm -f "$f"
+            continue
+        fi
+        
+        # Verificar si existe regla con grep flexible
+        if ! iptables -S OUTPUT | grep -qE "owner (UID match|--uid-owner) $UID"; then
+            # No existe, agregar
+            iptables -I OUTPUT -m owner --uid-owner "$USER" -j ACCEPT
+        fi
+    done
+}
+
+check_and_kill_excess() {
+    # Iterar sobre usuarios que tienen limite en limits.conf
+    # Formato limits.conf: usuario hard maxlogins N
+    if [ ! -f /etc/security/limits.conf ]; then return; fi
+    
+    grep "hard maxlogins" /etc/security/limits.conf | while read line; do
+        # Limpiar linea
+        if [[ "$line" == \#* ]]; then continue; fi
+        
+        USER=$(echo "$line" | awk '{print $1}')
+        LIMIT=$(echo "$line" | awk '{print $4}')
+        
+        if [ -z "$USER" ] || [ -z "$LIMIT" ]; then continue; fi
+        
+        # Contar procesos SSHD y Dropbear del usuario
+        # Usamos pgrep -u usuario y filtramos por nombre exacto o CMD
+        # Dropbear suele correr como root pero forkear como usuario? No siempre.
+        # Mejor usar ps aux.
+        
+        # PIDs de este usuario que sean sshd o dropbear
+        PIDS=$(ps -u "$USER" -o pid,comm | grep -E "sshd|dropbear" | awk '{print $1}' | sort -n || true)
+        
+        # Contar lineas
+        COUNT=$(echo "$PIDS" | wc -w)
+        
+        if [ "$COUNT" -gt "$LIMIT" ]; then
+            # Calcular cuantos sobran
+            EXCESS=$((COUNT - LIMIT))
+            
+            # Matar los mas nuevos (PIDs mas altos, que estan al final por sort -n)
+            # tac invierte, head coge los primeros
+            
+            TO_KILL=$(echo "$PIDS" | tr ' ' '\n' | tac | head -n "$EXCESS")
+            
+            for pid in $TO_KILL; do
+                kill -9 "$pid"
+            done
+            # echo "Killed $EXCESS proc for $USER" # Silencioso para cron/loop
+        fi
+    done
 }
 listar_users() {
     echo "USERS_LIST:"
@@ -174,7 +335,15 @@ renovar_user() {
    
    local EXP_DATE=$(date -d "+$DAYS days" +%Y-%m-%d)
    usermod -e "$EXP_DATE" "$USER"
-   if [ $? -eq 0 ]; then echo "USER_RENEWED|$EXP_DATE"; else echo "ERROR"; fi
+   local RET=$?
+   
+   # FIX: Desbloquear cuenta y resetear consumo al renovar
+   # Importante para usuarios bloqueados por limite de datos
+   passwd -u "$USER" 2>/dev/null
+   iptables -D OUTPUT -m owner --uid-owner "$USER" -j ACCEPT 2>/dev/null || true
+   iptables -I OUTPUT -m owner --uid-owner "$USER" -j ACCEPT
+   
+   if [ $RET -eq 0 ]; then echo "USER_RENEWED|$EXP_DATE"; else echo "ERROR"; fi
 }
 ENDFUNC
 
@@ -1087,9 +1256,13 @@ ENDFUNC
 # --- CASE PRINCIPAL ---
 cat << 'ENDFUNC' >> ssh_manager.sh
 case "$1" in
-    crear_user) crear_user "$2" "$3" "$4" ;;
+    crear_user) crear_user "$2" "$3" "$4" "$5" "$6" ;;
     eliminar_user) eliminar_user "$2" ;;
     listar_users) listar_users ;;
+    check_consumo) check_consumo "$2" ;;
+    reset_consumo) reset_consumo "$2" ;;
+    sync_iptables) sync_iptables ;;
+    check_and_kill_excess) check_and_kill_excess ;;
     contar_conexiones) contar_conexiones ;;
     modificar_password) modificar_password "$2" "$3" ;;
     renovar_user) renovar_user "$2" "$3" ;;
@@ -1301,6 +1474,9 @@ def main_menu(chat_id, message_id=None):
         types.InlineKeyboardButton(ICON_USER + " Crear SSH", callback_data="menu_crear"),
         types.InlineKeyboardButton(ICON_INFO + " Info Servidor", callback_data="menu_info")
     )
+    # Boton Mis Datos para todos
+    markup.add(types.InlineKeyboardButton("📊 Mis Consumos", callback_data="my_stats"))
+    
     # Solo Admins y Super Admin pueden editar/eliminar
     if is_adm or is_sa:
         markup.add(
@@ -1982,7 +2158,12 @@ def callback_query(call):
         data = TEMP_SSH_CREATION.get(chat_id)
         if data:
             pwd = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-            perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
+            # Si es Super Admin, preguntar limites. Si no, crear directo.
+            if chat_id == SUPER_ADMIN:
+                TEMP_SSH_CREATION[chat_id]['pwd'] = pwd
+                ask_ssh_limits_menu(chat_id)
+            else:
+                perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
         else: main_menu(chat_id, msg_id)
 
     elif call.data == "ssh_pass_manual":
@@ -1994,6 +2175,40 @@ def callback_query(call):
     elif call.data == "back_main":
         bot.clear_step_handler_by_chat_id(chat_id=chat_id)
         main_menu(chat_id, msg_id)
+
+    elif call.data == "my_stats":
+        # Mostrar consumo
+        data = load_data()
+        owners = data.get('ssh_owners', {})
+        
+        # FIX: Super Admin ve TODO, Otros solo lo suyo
+        if chat_id == SUPER_ADMIN:
+             my_users = list(owners.keys())
+             header = "📊 <b>CONSUMO GLOBAL (SUPER ADMIN):</b>\n\n"
+        else:
+             my_users = [u for u, o in owners.items() if str(o) == str(chat_id)]
+             header = "📊 <b>TUS CONSUMOS DE DATOS:</b>\n\n"
+        
+        if not my_users:
+            bot.answer_callback_query(call.id, "No tienes usuarios activos.")
+            return
+            
+        my_users.sort()
+        msg = header
+        for u in my_users:
+            res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'check_consumo', u], capture_output=True, text=True)
+            # Output: GB|LIMIT
+            try:
+                parts = res.stdout.strip().split('|')
+                used = parts[0]
+                limit = parts[1]
+                msg += f"👤 <b>{u}:</b> <code>{used} GB</code> / <code>{limit} GB</code>\n"
+            except:
+                msg += f"👤 <b>{u}:</b> Error al leer\n"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="back_main"))
+        bot.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
 
     # --- DURATION TYPE HANDLERS ---
     elif call.data in ["param_days", "param_mins", "param_hours"]:
@@ -2017,6 +2232,74 @@ def callback_query(call):
             markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
             bot.edit_message_text(f"⏱️ <b>¿Cuántos MINUTOS?</b>\nUsuario: {user}", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
             bot.register_next_step_handler(call.message, lambda m: process_ssh_minutes(m, user))
+
+    # --- HANDLERS LIMITES SUPER ADMIN ---
+    elif call.data.startswith("sl_"):
+        data = TEMP_SSH_CREATION.get(chat_id)
+        if not data: main_menu(chat_id, msg_id); return
+        
+        user = data['user']
+        pwd = data['pwd']
+        days = data['days']
+        
+        if call.data == "sl_unlimited":
+            perform_ssh_creation(chat_id, user, pwd, days, "", "")
+        elif call.data == "sl_admin":
+            perform_ssh_creation(chat_id, user, pwd, days, "30", "50")
+        elif call.data == "sl_public":
+            perform_ssh_creation(chat_id, user, pwd, days, "1", "10")
+        elif call.data == "sl_custom":
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+            bot.edit_message_text(f"🔌 <b>Max Conexiones:</b>\nEscribe el número (ej: 5) o '0' para ilimitado.", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+            bot.register_next_step_handler(call.message, process_custom_limit_conn)
+
+def process_custom_limit_conn(message):
+    delete_user_msg(message)
+    conn = message.text.strip()
+    if conn == "0": conn = ""
+    
+    chat_id = message.chat.id
+    TEMP_SSH_CREATION[chat_id]['limit_conn'] = conn
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+    bot.edit_message_text(f"💾 <b>Límite de Datos:</b>\nEscribe el valor con unidad.\nEjemplos: <code>50</code> (GB), <code>500 MB</code>, <code>100 M</code>\nO escribe '0' para ilimitado.", chat_id, USER_STEPS.get(chat_id), parse_mode='HTML', reply_markup=markup)
+    bot.register_next_step_handler(message, process_custom_limit_gb)
+
+def process_custom_limit_gb(message):
+    delete_user_msg(message)
+    raw_input = message.text.strip().upper()
+    gb = ""
+    
+    if raw_input == "0": 
+        gb = ""
+    else:
+        # Detectar MB
+        if "M" in raw_input:
+            try:
+                # Extraer numeros
+                val = "".join([c for c in raw_input if c.isdigit() or c == '.'])
+                # Convertir MB a GB
+                gb_val = float(val) / 1024
+                # Formatear a 6 decimales
+                gb = f"{gb_val:.6f}"
+            except:
+                bot.send_message(message.chat.id, "❌ Error de formato. Usa numeros.")
+                main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
+                return
+        else:
+            # Asumir GB
+            val = "".join([c for c in raw_input if c.isdigit() or c == '.'])
+            gb = val
+    
+    chat_id = message.chat.id
+    data = TEMP_SSH_CREATION.get(chat_id)
+    if data:
+        conn = data.get('limit_conn', "")
+        perform_ssh_creation(chat_id, data['user'], data['pwd'], data['days'], conn, gb)
+    else:
+        main_menu(chat_id, USER_STEPS.get(chat_id))
 
 def show_pro_settings(chat_id, message_id):
     data = load_data()
@@ -2218,9 +2501,32 @@ def process_ssh_manual_pass(message):
     chat_id = message.chat.id
     data = TEMP_SSH_CREATION.get(chat_id)
     if data:
-        perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
+        if chat_id == SUPER_ADMIN:
+            TEMP_SSH_CREATION[chat_id]['pwd'] = pwd
+            ask_ssh_limits_menu(chat_id)
+        else:
+            perform_ssh_creation(chat_id, data['user'], pwd, data['days'])
     else:
         main_menu(chat_id, USER_STEPS.get(chat_id))
+
+def ask_ssh_limits_menu(chat_id):
+    msg_id = USER_STEPS.get(chat_id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("♾️ Ilimitado", callback_data="sl_unlimited"),
+        types.InlineKeyboardButton("💼 Admin (30/50GB)", callback_data="sl_admin"),
+        types.InlineKeyboardButton("👤 Public (1/10GB)", callback_data="sl_public"),
+        types.InlineKeyboardButton("⚙️ Personalizado", callback_data="sl_custom")
+    )
+    markup.add(types.InlineKeyboardButton(ICON_BACK + " Cancelar", callback_data="back_main"))
+    
+    user = TEMP_SSH_CREATION[chat_id]['user']
+    text = f"⚙️ <b>Límites para {user}:</b>\nSelecciona el perfil de restricciones:"
+    
+    try: bot.edit_message_text(text, chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
+    except: 
+        sent = bot.send_message(chat_id, text, parse_mode='HTML', reply_markup=markup)
+        USER_STEPS[chat_id] = sent.message_id
 
 def run_ssl_install(message):
     delete_user_msg(message)
@@ -2745,7 +3051,7 @@ def process_edit_renew(message, user):
         bot.send_message(message.chat.id, "❌ Error: Numero invalido.")
         main_menu(message.chat.id, USER_STEPS.get(message.chat.id))
 
-def perform_ssh_creation(chat_id, user, pwd, days):
+def perform_ssh_creation(chat_id, user, pwd, days, conn_limit=None, gb_limit=None):
     try:
         msg_id = USER_STEPS.get(chat_id)
         
@@ -2768,7 +3074,25 @@ def perform_ssh_creation(chat_id, user, pwd, days):
         else:
             cmd_days = str(days)
 
-        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, cmd_days]
+        # DEFINIR LIMITES (Logic update)
+        # Si se pasan argumentos explicitos (Super Admin Custom), usarlos.
+        # Si no, calcular segun rol.
+        
+        final_conn = ""
+        final_gb = ""
+        
+        if conn_limit is not None and gb_limit is not None:
+             final_conn = conn_limit
+             final_gb = gb_limit
+        else:
+             if is_admin(chat_id):
+                 final_conn = "30"
+                 final_gb = "50"
+             else:
+                 final_conn = "1"
+                 final_gb = "10"
+
+        cmd = [os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'crear_user', user, pwd, cmd_days, final_conn, final_gb]
         
         # Ejecutar y capturar TODO (stdout + stderr)
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -2813,6 +3137,11 @@ def perform_ssh_creation(chat_id, user, pwd, days):
                 msg += "☁️ <b>CLOUDFRONT:</b> <code>" + cfront + "</code> \n"
             if extra: msg += safe_format(extra) + "\n"
             msg += "<b>USER:</b> <code>" + user + "</code> \n<b>PASS:</b> <code>" + pwd + "</code> \n"
+            
+            # INFO LIMITES
+            msg += f"🔌 <b>Conexiones:</b> {final_conn if final_conn else 'Ilimitado'}\n"
+            data_disp = final_gb + " GB" if final_gb else "Ilimitado"
+            msg += f"💾 <b>Datos:</b> {data_disp}\n"
             
             # Datos SlowDNS si existen
             sdns = data.get('slowdns', {})
@@ -2989,22 +3318,75 @@ def cleanup_expired(force_report=False, chat_report=None):
         except Exception as e:
             print(f"Error en SSH Cleanup: {e}")
 
-    # Reportar si hubo borrados y se pidió reporte manual
     if deleted_count > 0 and force_report and chat_report:
         try: bot.send_message(chat_report, report_msg, parse_mode='HTML')
         except: pass
         
     return deleted_count
 
+# Cache para evitar spam de alertas
+ALERTS_CACHE = set()
+
+def check_data_consumption():
+    global ALERTS_CACHE
+    data = load_data()
+    owners = data.get('ssh_owners', {})
+    for user in list(owners.keys()):
+        try:
+            res = subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'check_consumo', user], capture_output=True, text=True)
+            # Output: GB|LIMIT
+            parts = res.stdout.strip().split('|')
+            used = float(parts[0])
+            limit_str = parts[1]
+            
+            # Limpiar string de limite (por si trae debug info extra)
+            # Ej: "10.0 (Proc: Active)" -> "10.0"
+            if " " in limit_str:
+                limit_str = limit_str.split(' ')[0]
+            
+            if limit_str == "Infinito": continue
+            limit = float(limit_str)
+            
+            if used >= limit:
+                # Solo bloquear/notificar si no se ha hecho ya
+                if user not in ALERTS_CACHE:
+                    # Bloquear usuario
+                    subprocess.run(['passwd', '-l', user])
+                    subprocess.run(['pkill', '-u', user])
+                    # Avisar al dueño
+                    owner_id = owners[user]
+                    try:
+                        bot.send_message(owner_id, f"⚠️ <b>ALERTA DE CONSUMO</b>\n\nEl usuario SSH <code>{user}</code> ha superado su límite de {limit} GB ({used} GB usados).\n\n⛔ <b>CUENTA BLOQUEADA (NO ELIMINADA)</b>\n💡 <i>Para desbloquear, usa la opción 'Renovar' en el menú.</i>", parse_mode='HTML')
+                        ALERTS_CACHE.add(user)
+                    except: pass
+            else:
+                # Si bajo del limite (recarga), quitar de cache
+                if user in ALERTS_CACHE:
+                    ALERTS_CACHE.remove(user)
+        except: pass
+
 # Hilo persistente de auto-limpieza
 def auto_cleanup_loop():
+    tick = 0
     while True:
         try:
-            # Ejecutar limpieza cada 60 segundos para soporte minutos
-            cleanup_expired()
-            time.sleep(60) 
+            # 1. Monitor de Conexiones y DATOS (CADA 7 SEGUNDOS) - PRIORIDAD ALTA
+            # Mata procesos sobrantes al instante y corta consumo rapido
+            subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'check_and_kill_excess'])
+            check_data_consumption()
+            
+            # 2. Limpieza de Expirados / Datos / Sync Iptables (CADA 60 SEGUNDOS APROX)
+            # Ejecutamos cada 9 ticks (7 * 9 = 63 seg)
+            if tick >= 9:
+                cleanup_expired()
+                # Sincronizar reglas iptables por si se borraron (reboot/flush)
+                subprocess.run([os.path.join(PROJECT_DIR, 'ssh_manager.sh'), 'sync_iptables'])
+                tick = 0
+            
+            tick += 1
+            time.sleep(7) 
         except:
-            time.sleep(600) # Si falla, reintentar en 10 min
+            time.sleep(10) # Si falla, reintentar rapido
 
 # Iniciar hilo al final del script principal
 
