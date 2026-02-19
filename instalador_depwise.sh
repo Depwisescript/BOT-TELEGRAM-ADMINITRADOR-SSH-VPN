@@ -2052,6 +2052,7 @@ def callback_query(call):
         markup.add(types.InlineKeyboardButton(ICON_BACK + " Volver", callback_data="menu_protocols"))
         sent = bot.edit_message_text("Introduce el <b>Dominio NS</b> para SlowDNS:", chat_id, msg_id, parse_mode='HTML', reply_markup=markup)
         # Aseguramos que el manejador se registre sobre el mensaje editado
+        USER_STEPS[chat_id] = sent.message_id
         bot.register_next_step_handler(sent, process_slowdns_ns)
     elif call.data == "update_slowdns_log" and chat_id == SUPER_ADMIN:
         update_install_log(chat_id, msg_id)
